@@ -1,0 +1,239 @@
+{
+  "name": "[DEV] EMII_WF04B_QUERY_FORMATTER",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -208,
+        304
+      ],
+      "id": "trigger",
+      "name": "TRG_FromOrchestrator",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_PrepareFormatterInput - Prepare structured items for the formatter agent\n// V2: Separação de notas da agenda + mascaramento de dados sensíveis\nconst input = $('TRG_FromOrchestrator').item.json;\n\nlet envelope = input.envelope || {};\nif (!envelope.from_phone) {\n  try { envelope = $json.envelope || {}; } catch(e) {}\n}\n\nconst agentResponse = input.agent_response || {};\nconst queryMeta = input.query_meta || {};\nconst items = agentResponse.items || [];\nconst queryType = queryMeta.query_type || 'general';\nconst tz = queryMeta.tz || 'America/Belem';\nconst dateRangeLabel = queryMeta.date_range_label || '';\nconst userMessage = (input.user_message || envelope.user_message || '').toLowerCase();\n\n// --- SEPARAR ITENS POR TIPO ---\nconst scheduleItems = []; // reminders, tasks (têm data/hora)\nconst noteItems = [];     // notes (informação salva)\n\nfor (const item of items) {\n  if (item.type === 'note') {\n    noteItems.push(item);\n  } else {\n    scheduleItems.push(item);\n  }\n}\n\n// --- DETECTAR INTENÇÃO DO USUÁRIO ---\nconst sensitiveKeywords = ['senha', 'password', 'login', 'código', 'codigo', 'pin', 'acesso', 'credencial'];\nconst noteQueryKeywords = ['nota', 'notas', 'anotação', 'anotações', 'salvo', 'salvei', 'guardei', 'guardado'];\nconst scheduleKeywords = ['agenda', 'programação', 'programacao', 'compromisso', 'semana', 'hoje', 'amanhã', 'amanha', 'horário', 'horario', 'lembrete', 'reunião', 'reuniao'];\n\nconst isSensitiveQuery = sensitiveKeywords.some(k => userMessage.includes(k));\nconst isNoteQuery = noteQueryKeywords.some(k => userMessage.includes(k)) || isSensitiveQuery;\nconst isScheduleQuery = scheduleKeywords.some(k => userMessage.includes(k));\n\n// Determinar qual conjunto de itens enviar ao agente\nlet relevantItems;\nlet queryContext;\n\nif (isNoteQuery && !isScheduleQuery) {\n  // Pergunta sobre notas/senhas -> só notas\n  relevantItems = noteItems;\n  queryContext = 'note_query';\n} else if (isScheduleQuery && !isNoteQuery) {\n  // Pergunta sobre agenda -> só agenda, SEM notas\n  relevantItems = scheduleItems;\n  queryContext = 'schedule_query';\n} else if (!isScheduleQuery && !isNoteQuery) {\n  // Pergunta genérica -> verificar se parece busca de info específica\n  // Se a mensagem parece uma pergunta sobre informação (qual, quanto, como)\n  const infoKeywords = ['qual', 'quanto', 'como', 'onde', 'quem', 'nome', 'telefone', 'endereço', 'endereco', 'email', 'wi-fi', 'wifi', 'placa'];\n  const isInfoQuery = infoKeywords.some(k => userMessage.includes(k));\n  \n  if (isInfoQuery && noteItems.length > 0) {\n    relevantItems = noteItems;\n    queryContext = 'note_query';\n  } else {\n    // Default: só agenda\n    relevantItems = scheduleItems;\n    queryContext = 'schedule_query';\n  }\n} else {\n  // Ambos (ex: \"qual minha agenda e minhas notas?\") -> tudo, mas notas separadas\n  relevantItems = items;\n  queryContext = 'mixed_query';\n}\n\n// --- MASCARAR DADOS SENSÍVEIS EM NOTAS ---\nfunction isSensitiveNote(note) {\n  // Verificar pelo campo is_sensitive do banco OU por keywords no título/valor\n  if (note.is_sensitive === true) return true;\n  const title = (note.title || '').toLowerCase();\n  const value = (note.value || note.content || '').toLowerCase();\n  const combined = title + ' ' + value;\n  return sensitiveKeywords.some(k => combined.includes(k));\n}\n\nfunction maskValue(value) {\n  if (!value) return '***';\n  const len = value.length;\n  if (len <= 2) return '*'.repeat(len);\n  if (len <= 4) return value.substring(0, 1) + '*'.repeat(len - 1);\n  // Mostrar primeiros 3 chars e últimos 2 chars para facilitar reconhecimento\n  const visibleStart = Math.min(3, Math.ceil(len * 0.3));\n  const visibleEnd = Math.min(2, Math.ceil(len * 0.2));\n  const masked = len - visibleStart - visibleEnd;\n  return value.substring(0, visibleStart) + '*'.repeat(Math.max(masked, 2)) + value.substring(len - visibleEnd);\n}\n\n// Processar notas: mascarar se sensível\nconst processedItems = relevantItems.map(item => {\n  if (item.type === 'note' && isSensitiveNote(item)) {\n    return {\n      ...item,\n      _sensitive: true,\n      _original_value: item.value,\n      value: maskValue(item.value || item.content || ''),\n      content: maskValue(item.value || item.content || '')\n    };\n  }\n  return item;\n});\n\nconst hasSensitiveNotes = processedItems.some(i => i._sensitive);\nconst isEmpty = (!processedItems || processedItems.length === 0);\nconst itemsJson = isEmpty ? '[]' : JSON.stringify(processedItems, null, 0);\n\nreturn [{\n  json: {\n    envelope: envelope,\n    trace_id: envelope.trace_id || '',\n    query_type: queryType,\n    query_context: queryContext,\n    date_range_label: dateRangeLabel,\n    tz: tz,\n    items: processedItems,\n    items_json: itemsJson,\n    user_message: input.user_message || envelope.user_message || '',\n    is_empty: isEmpty,\n    has_sensitive_notes: hasSensitiveNotes,\n    total_notes: noteItems.length,\n    total_schedule: scheduleItems.length\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        32,
+        304
+      ],
+      "id": "prepare",
+      "name": "TRF_PrepareFormatterInput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5.2",
+          "mode": "list",
+          "cachedResultName": "gpt-5.2"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 600
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        208,
+        512
+      ],
+      "id": "llm_primary",
+      "name": "LLM_Primary",
+      "credentials": {
+        "openAiApi": {
+          "id": "OyRKCJH0YdG2smVs",
+          "name": "Infra_OpenAi_Agents_Call"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5.1-codex",
+          "mode": "list",
+          "cachedResultName": "gpt-5.1-codex"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 400
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        560,
+        608
+      ],
+      "id": "llm_retry",
+      "name": "LLM_Retry",
+      "credentials": {
+        "openAiApi": {
+          "id": "OyRKCJH0YdG2smVs",
+          "name": "Infra_OpenAi_Agents_Call"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\"type\": \"object\", \"properties\": {\"formatted_text\": {\"type\": \"string\"}}, \"required\": [\"formatted_text\"], \"additionalProperties\": false}",
+        "autoFix": true,
+        "customizeRetryPrompt": true,
+        "prompt": "Act as a strict JSON repair engine.\n\nMain instruction:\nReturn ONLY one valid JSON object with exactly one key: \"formatted_text\" (string).\nNo extra text. No markdown. No code fences.\n\nExample of the required output (literal):\n{\"formatted_text\":\"your response here\"}\n\nYou will receive:\n- error: {error}\n- instructions: {instructions}\n- completion: {completion}\n\nTask:\nFix the completion so it becomes valid JSON matching the schema.\nReturn only the JSON."
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        560,
+        512
+      ],
+      "id": "parser",
+      "name": "Parser_Output"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=MENSAGEM DO USUÁRIO: {{ $json.user_message }}\n\nDados disponíveis:\nquery_type: {{ $json.query_type }}\nquery_context: {{ $json.query_context }}\ndate_range_label: {{ $json.date_range_label }}\ntimezone: {{ $json.tz }}\nis_empty: {{ $json.is_empty }}\nhas_sensitive_notes: {{ $json.has_sensitive_notes }}\ntotal_notes: {{ $json.total_notes }}\ntotal_schedule: {{ $json.total_schedule }}\nitems: {{ $json.items_json }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "Você é o formatador de respostas da EMII, assistente pessoal do Márcio.\n\nSua função é transformar dados JSON de compromissos e notas em texto formatado para WhatsApp, considerando o que o usuário perguntou.\n\nREGRA PRINCIPAL — ENTENDA A PERGUNTA:\n- Leia a user_message para entender O QUE o usuário quer saber\n- Se o usuário pergunta sobre um item ESPECÍFICO (ex: \"qual a senha do Wi-Fi?\"), encontre a nota/item relevante e responda DIRETAMENTE\n- Se o usuário pergunta sobre agenda/compromissos/semana, formate APENAS os compromissos (reminders/tasks)\n- NUNCA misture notas com agenda. São coisas COMPLETAMENTE diferentes.\n\n---\n\nSEPARAÇÃO OBRIGATÓRIA — NOTAS vs AGENDA:\n- query_context=\"schedule_query\": Mostrar APENAS compromissos (reminders/tasks). NUNCA incluir notas.\n- query_context=\"note_query\": Mostrar APENAS notas relevantes. NUNCA incluir compromissos.\n- query_context=\"mixed_query\": Mostrar agenda primeiro, depois notas separadas com cabeçalho \"📝 Notas salvas:\"\n\n---\n\nTRATAMENTO DE DADOS SENSÍVEIS (CRÍTICO):\n- Itens com _sensitive=true contêm dados mascarados (ex: \"lea****\")\n- NUNCA tente desmascarar ou adivinhar o conteúdo completo\n- Exiba o conteúdo EXATAMENTE como recebido (mascarado)\n- Após exibir o dado mascarado, adicione: \"🔐 Para ver o conteúdo completo, informe sua contrasenha de segurança.\"\n- Se o usuário não tem contrasenha cadastrada, diga: \"🔐 Dado protegido. Para acessar senhas completas, cadastre uma contrasenha dizendo: 'Cadastrar contrasenha: [sua senha]'\"\n\nExemplo de resposta para nota sensível:\n\"A senha do Wi-Fi de casa é: lea*****\n🔐 Para ver o conteúdo completo, informe sua contrasenha de segurança.\"\n\n---\n\nREGRAS DE FORMATAÇÃO (para listas de compromissos):\n1. Agrupar por dia: Dia da semana (DD/MM/AAAA)\n2. Reminders e Tasks: 🕐 HH:MM + 🔔/📋 + título + status (🔵 Pendente / ✅ Concluído / 🟣 Notificado)\n3. Máximo 8 itens. Se houver mais, mostrar os 8 mais próximos e dizer \"Mostrando os próximos 8.\"\n4. Usar respiro entre blocos (linha em branco)\n5. Tom: executivo, direto, humano, sem excesso de emoji\n6. Saída: apenas o texto final dentro do JSON com campo \"formatted_text\"\n\nREGRAS DE FORMATAÇÃO (para notas):\n1. Formato: 📝 título — conteúdo\n2. Notas NUNCA têm status (Pendente/Concluído). Nota é informação salva.\n3. Se a nota é sensível (_sensitive=true), mostrar conteúdo mascarado + aviso de contrasenha\n4. Se a nota NÃO é sensível, mostrar conteúdo normalmente\n\nQUANDO ITEMS ESTIVER VAZIO ([]) OU is_empty=true:\n- NÃO listar dias nem compromissos\n- Responder de forma amigável e natural\n- Adaptar ao query_context:\n  - schedule_query: \"Hoje tá tranquilo, Márcio! Nada na agenda por enquanto. Quer que eu crie algum lembrete? 😊\"\n  - note_query: \"Não encontrei nenhuma nota sobre isso, Márcio. Quer que eu salve alguma informação? 😊\"\n\nQUANDO O USUÁRIO PERGUNTA SOBRE UMA NOTA ESPECÍFICA:\n- Encontre a nota pelo título ou conteúdo nos items\n- Se a nota é sensível: responda com conteúdo mascarado + aviso de contrasenha\n- Se a nota NÃO é sensível: responda DIRETAMENTE com o conteúdo completo\n- Se a nota não tiver conteúdo salvo, diga: \"Encontrei a nota '[título]', mas não tem conteúdo detalhado salvo.\"\n- NÃO liste outros compromissos — responda só o que foi perguntado\n\nNUNCA:\n- Inventar compromissos ou dados que não existem\n- Usar markdown (**, ##) — apenas texto simples e emojis\n- Responder com JSON ou código\n- Mostrar status (Pendente/Concluído) em notas\n- Listar toda a agenda quando o usuário pergunta sobre algo específico\n- Misturar notas com agenda quando o usuário pergunta só sobre um dos dois\n- Tentar desmascarar ou adivinhar senhas/dados sensíveis\n- Exibir dados sensíveis sem mascaramento\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        288,
+        304
+      ],
+      "id": "agent",
+      "name": "Agent_QueryFormatter"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_FormatOutput - Extract formatted text and return standard envelope\nlet input;\ntry {\n  input = $('TRF_PrepareFormatterInput').item.json;\n} catch (e) {\n  input = $json;\n}\n\nlet formattedText = '';\n\n// Get Agent output\nlet agentOutput = null;\ntry {\n  agentOutput = $('Agent_QueryFormatter').item.json;\n} catch (e) {}\n\nif (agentOutput) {\n  // Extract text from Agent output\n  try {\n    if (agentOutput.formatted_text) {\n      formattedText = agentOutput.formatted_text;\n    } else if (agentOutput.output) {\n      let out = agentOutput.output;\n      if (typeof out === 'string') {\n        out = out.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n        try {\n          const parsed = JSON.parse(out);\n          formattedText = parsed.formatted_text || parsed.text || out;\n        } catch (pe) {\n          formattedText = out;\n        }\n      } else if (typeof out === 'object') {\n        formattedText = out.formatted_text || out.text || JSON.stringify(out);\n      }\n    } else if (agentOutput.text) {\n      formattedText = agentOutput.text;\n    }\n  } catch (e) {\n    formattedText = agentOutput.output || agentOutput.text || '';\n  }\n}\n\n// Fallback if Agent returned nothing useful\nif (!formattedText || formattedText.length < 5) {\n  if (input.is_empty) {\n    formattedText = 'Tudo tranquilo por aqui! 😊 Não encontrei nenhum compromisso registrado. Quer que eu crie algum lembrete?';\n  } else {\n    formattedText = 'Não foi possível formatar a agenda. Tente novamente.';\n  }\n}\n\nreturn [{\n  json: {\n    envelope: input.envelope || {},\n    agent_response: {\n      text: formattedText,\n      agent: 'QUERY_FORMATTER',\n      items_count: (input.items || []).length\n    }\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        528,
+        304
+      ],
+      "id": "format_output",
+      "name": "TRF_FormatOutput"
+    },
+    {
+      "parameters": {
+        "path": "eb6ceb38-4349-4b26-b43f-d5df99581bc2",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        144
+      ],
+      "id": "37cf954c-8710-4973-bc55-a8ee98e2924c",
+      "name": "Webhook",
+      "webhookId": "eb6ceb38-4349-4b26-b43f-d5df99581bc2"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TRG_FromOrchestrator": {
+      "main": [
+        [
+          {
+            "node": "TRF_PrepareFormatterInput",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_PrepareFormatterInput": {
+      "main": [
+        [
+          {
+            "node": "Agent_QueryFormatter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent_QueryFormatter": {
+      "main": [
+        [
+          {
+            "node": "TRF_FormatOutput",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM_Primary": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agent_QueryFormatter",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parser_Output": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Agent_QueryFormatter",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM_Retry": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Parser_Output",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "versionId": "09e22f1d-c95c-4cc3-b32d-9bc797a34b4f",
+  "meta": {
+    "instanceId": "e5b5be90f9458642dd4b6a612950f8d170694c02cfe60ae6b638142ad8aa31e6"
+  },
+  "id": "eDnggAlW92PmP53Y",
+  "tags": [
+    {
+      "updatedAt": "2026-02-28T20:43:57.398Z",
+      "createdAt": "2026-02-28T20:43:57.398Z",
+      "id": "L6OShbFn4DQIWFov",
+      "name": "v3 EMII - staging"
+    }
+  ]
+}

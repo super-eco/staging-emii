@@ -1,0 +1,315 @@
+{
+  "name": "[DEV] EMII_02_Scheduler",
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "items",
+        "limit": 100,
+        "filterType": "string",
+        "filterString": "=type=in.(reminder,task)&notification_sent_at=is.null&notification_datetime=lte.{{ $now.toISO() }}"
+      },
+      "id": "db-query-pending",
+      "name": "DB_QueryPendingReminders",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        400,
+        304
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "loose"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "has-items",
+              "leftValue": "={{ $input.first().json.length || $input.all().length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        608,
+        304
+      ],
+      "id": "chk-has-items",
+      "name": "CHK_HasItems"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format reminder message for WhatsApp - Beautiful format with LOCAL time\nconst allItems = $input.all();\nif (!allItems || allItems.length === 0) {\n    return [];\n}\n\n// Format UTC date to local Brazilian format (GMT-3)\nfunction formatDateLocal(isoDate) {\n  if (!isoDate) return '';\n  const date = new Date(isoDate);\n  // Adjust to GMT-3\n  date.setHours(date.getHours() - 3);\n  \n  const day = String(date.getDate()).padStart(2, '0');\n  const month = String(date.getMonth() + 1).padStart(2, '0');\n  const year = date.getFullYear();\n  const hours = String(date.getHours()).padStart(2, '0');\n  const minutes = String(date.getMinutes()).padStart(2, '0');\n  \n  if (hours === '23' && minutes === '59') {\n    return day + '/' + month + '/' + year + ' | Até fim do dia';\n  }\n  return day + '/' + month + '/' + year + ' às ' + hours + ':' + minutes;\n}\n\n// Process each item\nconst results = allItems.map(item => {\n    const data = item.json;\n    const title = data.title || 'Sem título';\n    \n    // Build beautiful message\n    let message = 'Oi Márcio! 👋\\n\\n⏰ LEMBRAR DE:\\n' + title;\n    \n    if (data.value) {\n      message += '\\n\\n📋 Detalhes: ' + data.value;\n    }\n    \n    if (data.event_datetime) {\n      message += '\\n\\n📅 Data e hora: ' + formatDateLocal(data.event_datetime);\n    }\n    \n    message += '\\n\\nPrecisa de algo mais? 😊';\n    \n    return {\n        json: {\n            item_id: data.id,\n            owner_phone: data.owner_phone,\n            message: message,\n            title: title,\n            type: data.type\n        }\n    };\n});\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        208
+      ],
+      "id": "trf-format-msg",
+      "name": "TRF_FormatMessage"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.z-api.io/instances/3EF161BDC6931254B5992E8547AF841B/token/A3A3332D51363D4CBD61F10B/send-text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone: $json.owner_phone, message: $json.message }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1008,
+        208
+      ],
+      "id": "api-zapi-send",
+      "name": "API_ZAPI_SendReminder",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2wrd7ilBY0oPeHcv",
+          "name": "Vini_Business_ZAPI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://chtkfksjqcvlxpgyzlsf.supabase.co/rest/v1/items?id=eq.{{ $('TRF_FormatMessage').item.json.item_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "apikey",
+              "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNodGtma3NqcWN2bHhwZ3l6bHNmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjMwODU1NywiZXhwIjoyMDg3ODg0NTU3fQ.DM9wL7MlXRBuM_IYDk3pQ_q-WE7DYuwpqTTywg5A05U"
+            },
+            {
+              "name": "Authorization",
+              "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNodGtma3NqcWN2bHhwZ3l6bHNmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjMwODU1NywiZXhwIjoyMDg3ODg0NTU3fQ.DM9wL7MlXRBuM_IYDk3pQ_q-WE7DYuwpqTTywg5A05U"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $(\"TRF_FormatMessage\").item.json.type === \"reminder\" ? JSON.stringify({ \"notification_sent_at\": $now.toISO(), \"status\": \"notified\" }) : JSON.stringify({ \"notification_sent_at\": $now.toISO() }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        208
+      ],
+      "id": "db-update-notified",
+      "name": "DB_UpdateNotifiedAt"
+    },
+    {
+      "parameters": {
+        "tableId": "messages",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "provider",
+              "fieldValue": "zapi"
+            },
+            {
+              "fieldId": "provider_message_id",
+              "fieldValue": "={{ $('TRF_FormatMessage').item.json.item_id }}"
+            },
+            {
+              "fieldId": "from_phone",
+              "fieldValue": "system"
+            },
+            {
+              "fieldId": "to_phone",
+              "fieldValue": "={{ $('TRF_FormatMessage').item.json.owner_phone }}"
+            },
+            {
+              "fieldId": "direction",
+              "fieldValue": "out"
+            },
+            {
+              "fieldId": "type",
+              "fieldValue": "text"
+            },
+            {
+              "fieldId": "text_raw",
+              "fieldValue": "={{ $json.message }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1408,
+        208
+      ],
+      "id": "db-log-outbound",
+      "name": "DB_LogOutbound",
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        800,
+        400
+      ],
+      "id": "noop-no-items",
+      "name": "NoOp_NoItems"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        208,
+        304
+      ],
+      "id": "trg-cron",
+      "name": "TRG_Cron_1min"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "DB_QueryPendingReminders": {
+      "main": [
+        [
+          {
+            "node": "CHK_HasItems",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CHK_HasItems": {
+      "main": [
+        [
+          {
+            "node": "TRF_FormatMessage",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "NoOp_NoItems",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_FormatMessage": {
+      "main": [
+        [
+          {
+            "node": "API_ZAPI_SendReminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_ZAPI_SendReminder": {
+      "main": [
+        [
+          {
+            "node": "DB_UpdateNotifiedAt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_UpdateNotifiedAt": {
+      "main": [
+        [
+          {
+            "node": "DB_LogOutbound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRG_Cron_1min": {
+      "main": [
+        [
+          {
+            "node": "DB_QueryPendingReminders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Belem",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "versionId": "1027bc20-a841-4711-a427-a536bb4a277a",
+  "meta": {
+    "instanceId": "e5b5be90f9458642dd4b6a612950f8d170694c02cfe60ae6b638142ad8aa31e6"
+  },
+  "id": "EhYQQqjn59Z3OUbx",
+  "tags": [
+    {
+      "updatedAt": "2026-02-28T20:43:57.398Z",
+      "createdAt": "2026-02-28T20:43:57.398Z",
+      "id": "L6OShbFn4DQIWFov",
+      "name": "v3 EMII - staging"
+    }
+  ]
+}

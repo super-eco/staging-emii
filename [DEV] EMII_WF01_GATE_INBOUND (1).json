@@ -1,0 +1,935 @@
+{
+  "name": "[DEV] EMII_WF01_GATE_INBOUND",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "emii-gate-dev",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        -416
+      ],
+      "id": "gate-webhook",
+      "name": "TRG_Webhook",
+      "webhookId": "emii-gate-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_NormalizeAndValidate - Gate de entrada (STRICT)\n// v3.0 - Added media URL extraction for audio/image processing\nconst input = $json;\nconst body = input.body || input;\nconst headers = input.headers || {};\n\n// === CONFIG ===\nconst WHITELIST = ['5593992166616', '5511999999999', '5593991234567', '5593984345505', '559398434550'];\n\n// === HELPERS ===\nfunction normalizePhone(raw) {\n  if (!raw) return '';\n  let digits = String(raw).replace(/\\D/g, '');\n  if (!digits.startsWith('55') && (digits.length === 10 || digits.length === 11)) {\n    digits = '55' + digits;\n  }\n  if (digits.startsWith('55') && digits.length === 12) {\n    digits = digits.slice(0, 4) + '9' + digits.slice(4);\n  }\n  if (digits.length > 13) {\n    digits = digits.slice(0, 13);\n  }\n  return digits;\n}\n\n// === EXTRAÇÃO - Handle Z-API format AND test format ===\nconst zapiData = body.data || {};\nconst zapiKey = zapiData.key || {};\nconst zapiMessage = zapiData.message || {};\n\n// Extract phone from remoteJid\nconst remoteJid = zapiKey.remoteJid || '';\nconst phoneFromJid = remoteJid.split('@')[0].replace('+', '');\n\n// Extract message ID\nconst messageId = zapiKey.id || body.messageId || body.id?.id || `test_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;\n\n// Extract phone\nconst phone = normalizePhone(phoneFromJid || body.from_phone || body.phone || body.from);\n\n// Extract text - try Z-API format first, then test format, then fallback\nconst text = zapiMessage.conversation || \n             zapiMessage.extendedTextMessage?.text || \n             body.message ||\n             body.text?.message || \n             body.caption || \n             '';\n\n// === MEDIA DETECTION ===\nlet mediaType = null;\nlet isMedia = false;\nlet mediaUrl = null;\nlet mediaCaption = null;\n\nif (zapiMessage.audioMessage || body.audio) {\n  mediaType = 'audio';\n  isMedia = true;\n  mediaUrl = zapiMessage.audioMessage?.url \n    || zapiMessage.audioMessage?.directPath\n    || body.audio?.audioUrl \n    || body.audio?.url\n    || body.audioUrl\n    || null;\n} else if (zapiMessage.imageMessage || body.image) {\n  mediaType = 'image';\n  isMedia = true;\n  mediaUrl = zapiMessage.imageMessage?.url \n    || zapiMessage.imageMessage?.directPath\n    || body.image?.imageUrl \n    || body.image?.url\n    || body.imageUrl\n    || null;\n  mediaCaption = zapiMessage.imageMessage?.caption \n    || body.image?.caption \n    || body.caption\n    || null;\n} else if (zapiMessage.videoMessage || body.video) {\n  mediaType = 'video';\n  isMedia = true;\n} else if (zapiMessage.documentMessage || zapiMessage.documentWithCaptionMessage || body.document) {\n  mediaType = 'document';\n  isMedia = true;\n} else if (zapiMessage.stickerMessage || body.sticker) {\n  mediaType = 'sticker';\n  isMedia = true;\n} else if (zapiMessage.contactMessage || zapiMessage.contactsArrayMessage) {\n  mediaType = 'contact';\n  isMedia = true;\n} else if (zapiMessage.locationMessage || zapiMessage.liveLocationMessage) {\n  mediaType = 'location';\n  isMedia = true;\n}\n\n// Extract flags\nconst isGroup = remoteJid.includes('@g.us') || body.isGroup === true;\nconst fromMe = zapiKey.fromMe === true || body.fromMe === true;\n\n// === REGRA DE AUTORIZAÇÃO ===\nconst isAuthorized = WHITELIST.includes(phone);\n\n// Media messages should NOT be ignored\nconst shouldIgnore = !isAuthorized || isGroup || fromMe || (!text && !isMedia);\n\n// === TRACE ===\nconst trace_id = `emii_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;\n\n// === IGNORE REASON ===\nlet ignoreReason = '';\nif (!isAuthorized) ignoreReason = 'unauthorized_phone';\nelse if (isGroup) ignoreReason = 'is_group';\nelse if (fromMe) ignoreReason = 'from_me';\nelse if (!text && !isMedia) ignoreReason = 'empty_text';\n\nreturn [{\n  json: {\n    provider_message_id: messageId,\n    from_phone: phone,\n    text_raw: text,\n    is_group: isGroup,\n    from_me: fromMe,\n    is_media: isMedia,\n    media_type: mediaType,\n    media_url: mediaUrl,\n    media_caption: mediaCaption,\n    trace_id: trace_id,\n    received_at: new Date().toISOString(),\n    validation: {\n      should_ignore: shouldIgnore,\n      ignore_reason: ignoreReason,\n      is_authorized: isAuthorized\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        -416
+      ],
+      "id": "gate-normalize",
+      "name": "TRF_NormalizeAndValidate"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "process-check",
+              "leftValue": "={{ $json.validation.should_ignore }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        448,
+        -416
+      ],
+      "id": "gate-if-process",
+      "name": "IF_ShouldProcess"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Return ignored status (HTTP response)\nconst input = $('TRF_NormalizeAndValidate').item.json;\nreturn [{\n  json: {\n    status: 'ignored',\n    reason: input.validation.ignore_reason,\n    trace_id: input.trace_id\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        -320
+      ],
+      "id": "gate-ret-ignored",
+      "name": "TRF_ReturnIgnored"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "messages",
+        "limit": 1,
+        "filterType": "string",
+        "filterString": "provider_message_id=eq.{{ $json.provider_message_id }}"
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2560,
+        -512
+      ],
+      "id": "gate-check-idem",
+      "name": "DB_CheckIdempotency",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "new-check",
+              "leftValue": "={{ !$input.first().json.id }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2784,
+        -512
+      ],
+      "id": "gate-if-new",
+      "name": "IF_IsNew"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Return duplicate status (HTTP response)\nconst input = $('TRF_NormalizeAndValidate').item.json;\nreturn [{\n  json: {\n    status: 'duplicate',\n    trace_id: input.trace_id,\n    provider_message_id: input.provider_message_id\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3008,
+        -480
+      ],
+      "id": "gate-ret-dup",
+      "name": "TRF_ReturnDuplicate"
+    },
+    {
+      "parameters": {
+        "tableId": "messages",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "provider_message_id",
+              "fieldValue": "={{ $('TRF_NormalizeAndValidate').item.json.provider_message_id }}"
+            },
+            {
+              "fieldId": "from_phone",
+              "fieldValue": "={{ $('TRF_NormalizeAndValidate').item.json.from_phone }}"
+            },
+            {
+              "fieldId": "to_phone",
+              "fieldValue": "EMII"
+            },
+            {
+              "fieldId": "direction",
+              "fieldValue": "in"
+            },
+            {
+              "fieldId": "type",
+              "fieldValue": "={{ $('TRF_NormalizeAndValidate').item.json.is_media ? $('TRF_NormalizeAndValidate').item.json.media_type : 'text' }}"
+            },
+            {
+              "fieldId": "text_raw",
+              "fieldValue": "={{ $('TRF_NormalizeAndValidate').item.json.text_raw || '[media: ' + ($('TRF_NormalizeAndValidate').item.json.media_type || 'unknown') + ']' }}"
+            },
+            {
+              "fieldId": "meta",
+              "fieldValue": "={{ JSON.stringify({ trace_id: $('TRF_NormalizeAndValidate').item.json.trace_id, received_at: $('TRF_NormalizeAndValidate').item.json.received_at }) }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3136,
+        -704
+      ],
+      "id": "gate-save",
+      "name": "DB_SaveInbound",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "user_prefs",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "owner_phone",
+              "keyValue": "={{ $('TRF_NormalizeAndValidate').item.json.from_phone }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3360,
+        -704
+      ],
+      "id": "gate-fetch-prefs",
+      "name": "DB_FetchPrefs",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_BuildEnvelope - Montar envelope completo\n// v3.0 - Suporte robusto a áudio transcrito e imagem analisada\nconst normalized = $('TRF_NormalizeAndValidate').item.json;\nconst prefs = $('DB_FetchPrefs').all()[0]?.json || {};\n\n// === DETERMINAR O TEXTO EFETIVO ===\n// Para áudio/imagem, o texto foi injetado pelos nodes TRF_Inject*\n// Para texto normal, vem direto do NormalizeAndValidate\n// Precisamos tentar buscar de cada fonte possível\n\nlet effectiveText = '';\n\n// Tentar pegar do TRF_InjectAudioText (se o fluxo passou por lá)\ntry {\n  const audioData = $('TRF_InjectAudioText').item.json;\n  if (audioData && audioData.text_raw) {\n    effectiveText = audioData.text_raw;\n  }\n} catch(e) {\n  // Node não executado nesta run, ignorar\n}\n\n// Tentar pegar do TRF_InjectImageText (se o fluxo passou por lá)\nif (!effectiveText) {\n  try {\n    const imageData = $('TRF_InjectImageText').item.json;\n    if (imageData && imageData.text_raw) {\n      effectiveText = imageData.text_raw;\n    }\n  } catch(e) {\n    // Node não executado nesta run, ignorar\n  }\n}\n\n// Fallback: texto normal do NormalizeAndValidate\nif (!effectiveText) {\n  effectiveText = normalized.text_raw || '';\n}\n\n// Determinar tipo de mídia original\nlet originalMediaType = null;\ntry {\n  const audioData = $('TRF_InjectAudioText').item.json;\n  if (audioData?.original_media_type) originalMediaType = audioData.original_media_type;\n} catch(e) {}\nif (!originalMediaType) {\n  try {\n    const imageData = $('TRF_InjectImageText').item.json;\n    if (imageData?.original_media_type) originalMediaType = imageData.original_media_type;\n  } catch(e) {}\n}\n\nconst envelope = {\n  trace_id: normalized.trace_id,\n  provider_message_id: normalized.provider_message_id,\n  from_phone: normalized.from_phone,\n  received_at: normalized.received_at,\n  \n  // === MENSAGEM DO USUÁRIO ===\n  user_message: effectiveText,\n  text_raw: effectiveText,\n  \n  // === MEDIA INFO ===\n  original_media_type: originalMediaType,\n  media_url: normalized.media_url || null,\n  \n  prefs: {\n    lead_time_default_seconds: prefs.lead_time_default_seconds || 600,\n    timezone: prefs.timezone || 'America/Belem'\n  }\n};\n\nreturn [{ json: { envelope } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3584,
+        -704
+      ],
+      "id": "gate-build-envelope",
+      "name": "TRF_BuildEnvelope"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "M7vwU4TgVpj6pGvL"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        3808,
+        -704
+      ],
+      "id": "gate-exec-orch",
+      "name": "EXEC_Orchestrator",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Return accepted status (HTTP response)\nconst envelope = $('TRF_BuildEnvelope').item.json.envelope;\nreturn [{\n  json: {\n    status: 'accepted',\n    trace_id: envelope.trace_id,\n    provider_message_id: envelope.provider_message_id\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4032,
+        -704
+      ],
+      "id": "gate-ret-accepted",
+      "name": "TRF_ReturnAccepted"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "media-check",
+              "leftValue": "={{ $('TRF_NormalizeAndValidate').item.json.is_media }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        672,
+        -512
+      ],
+      "id": "if-is-media-001",
+      "name": "IF_IsMedia"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_PrepareMediaFallback - Prepare fallback response for unsupported media\nconst normalized = $('TRF_NormalizeAndValidate').item.json;\nconst mediaType = normalized.media_type;\n\nconst mediaLabels = {\n  'audio': 'áudios',\n  'image': 'imagens',\n  'video': 'vídeos',\n  'document': 'documentos',\n  'sticker': 'figurinhas',\n  'contact': 'contatos',\n  'location': 'localizações'\n};\n\nconst label = mediaLabels[mediaType] || 'esse tipo de mídia';\n\nconst fallbackText = `Oi Márcio! Ainda não consigo processar ${label}, mas estou evoluindo! 🚀 Por enquanto, me envia em texto que eu resolvo rapidinho. Como posso te ajudar?`;\n\n// Format phone for Z-API\nlet toPhone = normalized.from_phone;\nif (!toPhone.includes('@')) {\n  toPhone = toPhone.replace(/[^0-9]/g, '') + '@s.whatsapp.net';\n}\n\nreturn [{\n  json: {\n    phone: toPhone,\n    message: fallbackText,\n    trace_id: normalized.trace_id,\n    media_type: mediaType\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1104,
+        -400
+      ],
+      "id": "trf-media-fallback-001",
+      "name": "TRF_PrepareMediaFallback"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.z-api.io/instances/3EF161BDC6931254B5992E8547AF841B/token/A3A3332D51363D4CBD61F10B/send-text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone: $json.phone.replace('@s.whatsapp.net', ''), message: $json.message }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1328,
+        -400
+      ],
+      "id": "zapi-media-fallback-001",
+      "name": "ZAPI_SendMediaFallback",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2wrd7ilBY0oPeHcv",
+          "name": "Vini_Business_ZAPI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_ReturnMediaFallback - Return after sending media fallback\nconst prepared = $('TRF_PrepareMediaFallback').item.json;\nconst zapiResp = $json;\n\nreturn [{\n  json: {\n    status: 'media_fallback_sent',\n    media_type: prepared.media_type,\n    trace_id: prepared.trace_id,\n    zapi_response: zapiResp\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        -400
+      ],
+      "id": "trf-return-media-001",
+      "name": "TRF_ReturnMediaFallback"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": ""
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('TRF_NormalizeAndValidate').item.json.media_type }}",
+                    "rightValue": "audio",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": ""
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('TRF_NormalizeAndValidate').item.json.media_type }}",
+                    "rightValue": "image",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        896,
+        -704
+      ],
+      "id": "sw-media-type-001",
+      "name": "SW_MediaType"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.assemblyai.com/v2/transcript",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ audio_url: $(\"TRF_NormalizeAndValidate\").item.json.media_url, language_code: \"pt\" }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1136,
+        -992
+      ],
+      "id": "http-create-transcript-001",
+      "name": "HTTP_CreateTranscript",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "h09xRqR8oGVz6Rxi",
+          "name": "Infra_AssemblyAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1360,
+        -992
+      ],
+      "id": "wait-transcript-001",
+      "name": "WAIT_ForTranscript",
+      "webhookId": "wait-transcript-webhook"
+    },
+    {
+      "parameters": {
+        "url": "=https://api.assemblyai.com/v2/transcript/{{ $('HTTP_CreateTranscript').item.json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1584,
+        -992
+      ],
+      "id": "http-poll-transcript-001",
+      "name": "HTTP_PollTranscript",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "h09xRqR8oGVz6Rxi",
+          "name": "Infra_AssemblyAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": ""
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.status }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1808,
+        -992
+      ],
+      "id": "if-transcript-ready-001",
+      "name": "IF_TranscriptReady"
+    },
+    {
+      "parameters": {
+        "amount": 8
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2032,
+        -928
+      ],
+      "id": "wait-retry-001",
+      "name": "WAIT_Retry",
+      "webhookId": "wait-retry-webhook"
+    },
+    {
+      "parameters": {
+        "url": "=https://api.assemblyai.com/v2/transcript/{{ $('HTTP_CreateTranscript').item.json.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2256,
+        -928
+      ],
+      "id": "http-poll-transcript-002",
+      "name": "HTTP_PollTranscript2",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "h09xRqR8oGVz6Rxi",
+          "name": "Infra_AssemblyAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_InjectAudioText - Injeta transcrição do AssemblyAI no fluxo normal\nconst normalized = $('TRF_NormalizeAndValidate').item.json;\nconst transcriptResponse = $json;\n\n// AssemblyAI retorna { text: \"transcrição\", status: \"completed\" }\nconst transcription = transcriptResponse.text || '';\n\nif (!transcription) {\n  return [{\n    json: {\n      ...normalized,\n      text_raw: '[Áudio recebido mas não foi possível transcrever]',\n      is_media: false,\n      original_media_type: 'audio',\n      media_transcription: null\n    }\n  }];\n}\n\nreturn [{\n  json: {\n    ...normalized,\n    text_raw: transcription,\n    user_message: transcription,\n    is_media: false,\n    original_media_type: 'audio',\n    media_transcription: transcription\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2480,
+        -992
+      ],
+      "id": "inject-audio-001",
+      "name": "TRF_InjectAudioText"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "HTTP-Referer",
+              "value": "https://n8n.redesupereco.com"
+            },
+            {
+              "name": "X-Title",
+              "value": "EMII-Vision"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"openai/gpt-4o\",\n  messages: [\n    {\n      role: \"system\",\n      content: \"Você é um assistente executivo. Analise a imagem enviada e descreva seu conteúdo de forma objetiva e completa. Se for um documento, transcreva o texto. Se for uma foto, descreva o que vê. Se for um print de tela, extraia as informações relevantes. Se tiver uma legenda, considere-a como contexto. Responda SEMPRE em português.\"\n    },\n    {\n      role: \"user\",\n      content: [\n        {\n          type: \"image_url\",\n          image_url: {\n            url: $('TRF_NormalizeAndValidate').item.json.media_url\n          }\n        },\n        {\n          type: \"text\",\n          text: $('TRF_NormalizeAndValidate').item.json.media_caption \n            ? \"Legenda da imagem: \" + $('TRF_NormalizeAndValidate').item.json.media_caption + \"\\n\\nDescreva e analise esta imagem.\"\n            : \"Descreva e analise esta imagem.\"\n        }\n      ]\n    }\n  ],\n  max_tokens: 1000\n}) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2096,
+        -624
+      ],
+      "id": "vision-analyze-001",
+      "name": "API_VisionAnalyze",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "6ergTsgANI55rcCV",
+          "name": "Infra_OpenRouter_HTTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_InjectImageText - Injeta descrição da Vision API no fluxo normal\nconst normalized = $('TRF_NormalizeAndValidate').item.json;\nconst visionResponse = $json;\n\n// OpenRouter/GPT-4o Vision retorna em choices[0].message.content\nconst description = visionResponse.choices?.[0]?.message?.content || '';\nconst caption = normalized.media_caption || '';\n\nlet finalText = '';\n\nif (description) {\n  if (caption) {\n    finalText = `[Imagem com legenda: \"${caption}\"]\\n\\nConteúdo da imagem: ${description}`;\n  } else {\n    finalText = `[Imagem recebida]\\n\\nConteúdo da imagem: ${description}`;\n  }\n} else {\n  finalText = caption \n    ? `[Imagem com legenda: \"${caption}\"] - Não foi possível analisar o conteúdo visual.`\n    : '[Imagem recebida mas não foi possível analisar]';\n}\n\nreturn [{\n  json: {\n    ...normalized,\n    text_raw: finalText,\n    user_message: finalText,\n    is_media: false,\n    original_media_type: 'image',\n    media_description: description,\n    media_caption: caption\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2320,
+        -624
+      ],
+      "id": "inject-image-001",
+      "name": "TRF_InjectImageText"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TRG_Webhook": {
+      "main": [
+        [
+          {
+            "node": "TRF_NormalizeAndValidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_NormalizeAndValidate": {
+      "main": [
+        [
+          {
+            "node": "IF_ShouldProcess",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_ShouldProcess": {
+      "main": [
+        [
+          {
+            "node": "IF_IsMedia",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "TRF_ReturnIgnored",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_IsMedia": {
+      "main": [
+        [
+          {
+            "node": "SW_MediaType",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB_CheckIdempotency",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SW_MediaType": {
+      "main": [
+        [
+          {
+            "node": "HTTP_CreateTranscript",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "API_VisionAnalyze",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "TRF_PrepareMediaFallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP_CreateTranscript": {
+      "main": [
+        [
+          {
+            "node": "WAIT_ForTranscript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WAIT_ForTranscript": {
+      "main": [
+        [
+          {
+            "node": "HTTP_PollTranscript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP_PollTranscript": {
+      "main": [
+        [
+          {
+            "node": "IF_TranscriptReady",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_TranscriptReady": {
+      "main": [
+        [
+          {
+            "node": "TRF_InjectAudioText",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "WAIT_Retry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WAIT_Retry": {
+      "main": [
+        [
+          {
+            "node": "HTTP_PollTranscript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP_PollTranscript2": {
+      "main": [
+        [
+          {
+            "node": "TRF_InjectAudioText",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_InjectAudioText": {
+      "main": [
+        [
+          {
+            "node": "DB_CheckIdempotency",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_VisionAnalyze": {
+      "main": [
+        [
+          {
+            "node": "TRF_InjectImageText",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_InjectImageText": {
+      "main": [
+        [
+          {
+            "node": "DB_CheckIdempotency",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_PrepareMediaFallback": {
+      "main": [
+        [
+          {
+            "node": "ZAPI_SendMediaFallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ZAPI_SendMediaFallback": {
+      "main": [
+        [
+          {
+            "node": "TRF_ReturnMediaFallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_CheckIdempotency": {
+      "main": [
+        [
+          {
+            "node": "IF_IsNew",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_IsNew": {
+      "main": [
+        [
+          {
+            "node": "DB_SaveInbound",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "TRF_ReturnDuplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_SaveInbound": {
+      "main": [
+        [
+          {
+            "node": "DB_FetchPrefs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_FetchPrefs": {
+      "main": [
+        [
+          {
+            "node": "TRF_BuildEnvelope",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_BuildEnvelope": {
+      "main": [
+        [
+          {
+            "node": "EXEC_Orchestrator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "EXEC_Orchestrator": {
+      "main": [
+        [
+          {
+            "node": "TRF_ReturnAccepted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "versionId": "0bab4ef4-9c67-4a2b-9286-96c419a00329",
+  "meta": {
+    "instanceId": "e5b5be90f9458642dd4b6a612950f8d170694c02cfe60ae6b638142ad8aa31e6"
+  },
+  "id": "CuyRRx0rht39rOFU",
+  "tags": [
+    {
+      "updatedAt": "2026-02-28T20:43:57.398Z",
+      "createdAt": "2026-02-28T20:43:57.398Z",
+      "id": "L6OShbFn4DQIWFov",
+      "name": "v3 EMII - staging"
+    }
+  ]
+}

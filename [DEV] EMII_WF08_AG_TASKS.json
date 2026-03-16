@@ -1,0 +1,444 @@
+{
+  "name": "[DEV] EMII_WF08_AG_TASKS",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "wf08-trigger",
+      "name": "TRG_FromOrchestrator",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        16,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.output.needs_clarification }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "wf08-if-clarify",
+      "name": "IF_NeedsClarification",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        848,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const envelope = $('TRG_FromOrchestrator').item.json.envelope;\nconst intent = $('Agent_TasksIntent').item.json.output;\n\nreturn [{\n  json: {\n    trace_id: envelope.trace_id,\n    draft: {\n      text: intent.clarification_question || \"Preciso de mais informações sobre a tarefa.\",\n      payload: {}\n    },\n    signals: {\n      needs_clarification: true,\n      clarification_question: intent.clarification_question\n    }\n  }\n}];"
+      },
+      "id": "wf08-return-clarify",
+      "name": "TRF_ReturnClarification",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.output.action }}",
+              "rightValue": "list",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "wf08-switch-action",
+      "name": "IF_IsListAction",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "task": "MDY5NjAyODM5OTIyNzk0NjM4MzM6MDow",
+        "additionalFields": {}
+      },
+      "id": "wf08-gtasks-list",
+      "name": "GTasks_ListTasks",
+      "type": "n8n-nodes-base.googleTasks",
+      "typeVersion": 1,
+      "position": [
+        1408,
+        192
+      ],
+      "credentials": {
+        "googleTasksOAuth2Api": {
+          "id": "mw82h3M70MIvp8It",
+          "name": "Infra_Tasks"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "task": "MDY5NjAyODM5OTIyNzk0NjM4MzM6MDow",
+        "title": "={{ $('Agent_TasksIntent').item.json.output.title }}",
+        "additionalFields": {
+          "dueDate": "={{ $('Agent_TasksIntent').item.json.output.due }}",
+          "notes": "={{ $('Agent_TasksIntent').item.json.output.notes }}"
+        }
+      },
+      "id": "wf08-gtasks-create",
+      "name": "GTasks_CreateTask",
+      "type": "n8n-nodes-base.googleTasks",
+      "typeVersion": 1,
+      "position": [
+        1408,
+        400
+      ],
+      "credentials": {
+        "googleTasksOAuth2Api": {
+          "id": "mw82h3M70MIvp8It",
+          "name": "Infra_Tasks"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const envelope = $('TRG_FromOrchestrator').item.json.envelope;\nconst tasks = $input.all();\n\nif (tasks.length === 0) {\n  return [{\n    json: {\n      trace_id: envelope.trace_id,\n      draft: {\n        text: \"Você não tem tarefas pendentes. 🎉\",\n        payload: { provider: \"gtasks\", task_count: 0 }\n      },\n      signals: { needs_clarification: false }\n    }\n  }];\n}\n\nlet text = `Você tem ${tasks.length} tarefa(s) pendente(s):\\n\\n`;\ntasks.forEach((t, i) => {\n  const task = t.json;\n  const title = task.title || \"(sem título)\";\n  const due = task.due ? new Date(task.due).toLocaleDateString('pt-BR') : \"sem prazo\";\n  text += `${i+1}. ${title} — ${due}\\n`;\n});\n\nreturn [{\n  json: {\n    trace_id: envelope.trace_id,\n    draft: {\n      text: text,\n      payload: { provider: \"gtasks\", task_count: tasks.length }\n    },\n    signals: { needs_clarification: false }\n  }\n}];"
+      },
+      "id": "wf08-format-list",
+      "name": "TRF_FormatListResult",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1632,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const envelope = $('TRG_FromOrchestrator').item.json.envelope;\nconst task = $input.first().json;\n\nconst title = task.title || \"Tarefa\";\nconst due = task.due ? `\\n📅 Prazo: ${new Date(task.due).toLocaleDateString('pt-BR')}` : \"\";\n\nconst text = `✅ Tarefa criada: ${title}${due}`;\n\nreturn [{\n  json: {\n    trace_id: envelope.trace_id,\n    draft: {\n      text: text,\n      payload: { provider: \"gtasks\", task_id: task.id }\n    },\n    signals: { needs_clarification: false }\n  }\n}];"
+      },
+      "id": "wf08-format-create",
+      "name": "TRF_FormatCreateResult",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1632,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "model": "gpt-5.2",
+        "options": {
+          "maxTokens": 500
+        }
+      },
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        32,
+        464
+      ],
+      "id": "df5cfcbb-5f1b-45c9-bab5-fab987474770",
+      "credentials": {
+        "openAiApi": {
+          "id": "OyRKCJH0YdG2smVs",
+          "name": "Infra_OpenAi_Agents_Call"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "gpt-4.1-mini",
+        "options": {
+          "maxTokens": 500,
+          "temperature": 0.7
+        }
+      },
+      "name": "OpenAI Chat Model Fallback",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        208,
+        560
+      ],
+      "id": "a278ea13-88bb-4de0-8cf1-2b9b97d56184",
+      "credentials": {
+        "openAiApi": {
+          "id": "OyRKCJH0YdG2smVs",
+          "name": "Infra_OpenAi_Agents_Call"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.envelope.from_phone }}",
+        "contextWindowLength": 10
+      },
+      "name": "Simple Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.2,
+      "position": [
+        400,
+        528
+      ],
+      "id": "c8c602c3-8600-4ef7-8acb-9b91e8511ae6"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Extraia a intenção do usuário para operações de tarefas.\nMENSAGEM: {{ $json.envelope.text_raw }}\nHINTS: {{ JSON.stringify($json.router.hints) }}",
+        "hasOutputParser": true,
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "Você é o agente de tarefas da EMII. Sua função é interpretar comandos relacionados ao Google Tasks e extrair informações estruturadas.\n\n## ACTIONS SUPORTADAS (V1)\n- list: listar tarefas pendentes\n- create: criar nova tarefa\n\n## REGRAS\n1. Se faltar título para criar tarefa: needs_clarification=true\n2. Para \"list\", retorne todas as tarefas pendentes (max 20)\n3. Nunca invente títulos ou descrições\n4. Se ambíguo, peça clarificação\n\n## EXEMPLOS\n- \"minhas tarefas\" → action: list\n- \"criar tarefa pagar fornecedor\" → action: create, title: \"pagar fornecedor\"\n- \"criar tarefa\" → needs_clarification: true, clarification_question: \"Qual é a tarefa?\"\n\n## OUTPUT FORMAT\nRetorne JSON puro, sem markdown:\n{\n  \"action\": \"list|create\",\n  \"title\": \"string|null\",\n  \"notes\": \"string|null\",\n  \"due\": \"ISO|null\",\n  \"needs_clarification\": false,\n  \"clarification_question\": \"null\"\n}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        272,
+        208
+      ],
+      "id": "ba4e0e1e-050d-4981-9b50-842ad6e05260",
+      "name": "Agent_TasksIntent"
+    },
+    {
+      "parameters": {
+        "autoFix": true,
+        "customizeRetryPrompt": true
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        576,
+        496
+      ],
+      "id": "a2d301de-74a6-496a-a136-ac1ace478465",
+      "name": "Structured Output Parser"
+    },
+    {
+      "parameters": {
+        "model": "gpt-5.2-codex",
+        "options": {
+          "maxTokens": 500,
+          "temperature": 0.7
+        }
+      },
+      "name": "OpenAI Chat Model Fallback1",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1,
+      "position": [
+        496,
+        752
+      ],
+      "id": "8604cc32-63d0-44c9-a0fe-81e742956a75",
+      "credentials": {
+        "openAiApi": {
+          "id": "OyRKCJH0YdG2smVs",
+          "name": "Infra_OpenAi_Agents_Call"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "path": "76f5b4d1-9190-464a-89fb-a392ffacca79",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        48
+      ],
+      "id": "0ceead17-a954-4ebd-a57a-3e0af0ef445e",
+      "name": "Webhook",
+      "webhookId": "76f5b4d1-9190-464a-89fb-a392ffacca79"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TRG_FromOrchestrator": {
+      "main": [
+        [
+          {
+            "node": "Agent_TasksIntent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_NeedsClarification": {
+      "main": [
+        [
+          {
+            "node": "TRF_ReturnClarification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF_IsListAction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_IsListAction": {
+      "main": [
+        [
+          {
+            "node": "GTasks_ListTasks",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "GTasks_CreateTask",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GTasks_ListTasks": {
+      "main": [
+        [
+          {
+            "node": "TRF_FormatListResult",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GTasks_CreateTask": {
+      "main": [
+        [
+          {
+            "node": "TRF_FormatCreateResult",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agent_TasksIntent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model Fallback": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agent_TasksIntent",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Agent_TasksIntent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent_TasksIntent": {
+      "main": [
+        [
+          {
+            "node": "IF_NeedsClarification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Agent_TasksIntent",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model Fallback1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Structured Output Parser",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "versionId": "573e2744-f0c4-4cf9-884b-e572ca5ed0af",
+  "meta": {
+    "instanceId": "e5b5be90f9458642dd4b6a612950f8d170694c02cfe60ae6b638142ad8aa31e6"
+  },
+  "id": "nnXbUpGsk9jrh3OY",
+  "tags": [
+    {
+      "updatedAt": "2026-02-28T20:43:57.398Z",
+      "createdAt": "2026-02-28T20:43:57.398Z",
+      "id": "L6OShbFn4DQIWFov",
+      "name": "v3 EMII - staging"
+    }
+  ]
+}

@@ -1,0 +1,741 @@
+{
+  "name": "[DEV] EMII_WF05_AG_CONFIG",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -400,
+        304
+      ],
+      "id": "trigger",
+      "name": "TRG_FromOrchestrator",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5.2",
+          "mode": "list",
+          "cachedResultName": "gpt-5.2"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 400
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -416,
+        528
+      ],
+      "id": "llm-primary",
+      "name": "LLM_Primary",
+      "credentials": {
+        "openAiApi": {
+          "id": "OyRKCJH0YdG2smVs",
+          "name": "Infra_OpenAi_Agents_Call"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1-mini"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 400,
+          "temperature": 0.2
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -272,
+        560
+      ],
+      "id": "llm-fallback",
+      "name": "LLM_Fallback",
+      "credentials": {
+        "openAiApi": {
+          "id": "OyRKCJH0YdG2smVs",
+          "name": "Infra_OpenAi_Agents_Call"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-codex-mini"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 300,
+          "temperature": 0.1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        32,
+        768
+      ],
+      "id": "llm-retry",
+      "name": "LLM_Retry",
+      "credentials": {
+        "openAiApi": {
+          "id": "OyRKCJH0YdG2smVs",
+          "name": "Infra_OpenAi_Agents_Call"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.envelope.from_phone }}",
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        -96,
+        576
+      ],
+      "id": "memory",
+      "name": "Memory"
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\"type\": \"object\", \"properties\": {\"config_type\": {\"type\": \"string\", \"enum\": [\"lead_time\", \"timezone\", \"master_password\", \"manage_item\"]}, \"lead_time_minutes\": {\"type\": [\"number\", \"null\"]}, \"timezone\": {\"type\": [\"string\", \"null\"]}, \"master_password\": {\"type\": [\"string\", \"null\"]}, \"item_action\": {\"type\": [\"string\", \"null\"], \"description\": \"Action: cancel, done, modify, or delete. REQUIRED when config_type is manage_item.\"}, \"item_search\": {\"type\": [\"string\", \"null\"], \"description\": \"Search text to find the item. REQUIRED when config_type is manage_item.\"}, \"modify_fields\": {\"type\": [\"object\", \"null\"], \"properties\": {\"new_title\": {\"type\": [\"string\", \"null\"]}, \"new_event_datetime\": {\"type\": [\"string\", \"null\"]}, \"new_duration_minutes\": {\"type\": [\"number\", \"null\"]}, \"add_attendees\": {\"type\": [\"array\", \"null\"], \"items\": {\"type\": \"string\"}, \"description\": \"Emails to add as attendees\"}, \"remove_attendees\": {\"type\": [\"array\", \"null\"], \"items\": {\"type\": \"string\"}, \"description\": \"Emails to remove from attendees\"}}, \"description\": \"Fields to modify when item_action is 'modify'. Null otherwise.\"}, \"confirmation_text\": {\"type\": \"string\"}}, \"required\": [\"config_type\", \"confirmation_text\"], \"additionalProperties\": false}",
+        "autoFix": true,
+        "customizeRetryPrompt": true,
+        "prompt": "Developer: You are a strict JSON repair engine.\n\nGiven an input, output exactly one valid JSON object with only these fields:\n- \"config_type\": string, one of \"lead_time\", \"timezone\", \"master_password\", \"manage_item\"\n- \"lead_time_minutes\": integer between 1 and 1440 (or null)\n- \"timezone\": string (e.g., \"America/Sao_Paulo\") or null\n- \"master_password\": string (2-50 chars) or null\n- \"item_action\": string, one of \"cancel\", \"done\", \"delete\", \"modify\" (or null)\n- \"item_search\": string (search text for the item) or null\n- \"modify_fields\": object with optional keys: new_title, new_event_datetime, new_duration_minutes, add_attendees (array of emails), remove_attendees (array of emails) — or null\n- \"confirmation_text\": string (confirmation message)\n\nIf the user wants to cancel, delete, complete, or modify an item:\n- config_type MUST be \"manage_item\"\n- item_action MUST be \"cancel\", \"done\", \"delete\", or \"modify\"\n- item_search MUST contain the search text\n\nIf config_type is missing, infer from other fields:\n- If item_action is set → \"manage_item\"\n- If lead_time_minutes is set → \"lead_time\"\n- If master_password is set → \"master_password\"\n- If timezone is set → \"timezone\"\n\nOutput only one valid JSON object—no extra text or formatting.\n\nYou are given:\n- Error to fix: {error}\n- Original completion to repair: {completion}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        96,
+        560
+      ],
+      "id": "parser",
+      "name": "Parser_Output"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.chatInput }}",
+        "hasOutputParser": true,
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "Você é EMII, assistente executivo pessoal de Márcio Aquino, CEO da rede de supermercados Super ECO no oeste do Pará. Atue como **Agente de Configuração do EMII**.\n\n## REGRA PRINCIPAL\nAnalise a mensagem do usuário e classifique em EXATAMENTE UM dos config_types abaixo. Preencha TODOS os campos do JSON de saída.\n\n## config_type: \"manage_item\"\nUse quando o usuário quer GERENCIAR um item existente (lembrete, tarefa, nota, reunião, evento).\n\n### item_action (OBRIGATÓRIO quando config_type é manage_item):\n- **\"cancel\"**: Cancelar, remover, excluir, apagar um item\n  - Exemplos: \"cancela a reunião\", \"remove o lembrete\", \"apaga a nota\", \"exclui a tarefa\"\n- **\"done\"**: Marcar como concluído, feito, finalizado\n  - Exemplos: \"essa tarefa foi concluída\", \"já fiz isso\", \"pode marcar como feito\", \"concluí a tarefa\"\n- **\"modify\"**: Alterar, mudar, remarcar, adicionar convidados, mudar duração\n  - Exemplos: \"muda a reunião para 15h\", \"adicione convidados\", \"altera a duração para 2h\", \"remarca para amanhã\"\n\n### item_search (OBRIGATÓRIO quando config_type é manage_item):\nTexto para buscar o item no banco de dados. Use palavras-chave do título do item.\n- \"cancela a reunião com time financeiro\" → item_search: \"reunião com time financeiro\"\n- \"essa tarefa dos bombeiros foi concluída\" → item_search: \"bombeiros\"\n- \"adicione convidados na reunião de hoje\" → item_search: \"reunião\"\n\n### modify_fields (quando item_action é \"modify\"):\n- **new_title**: novo título (se renomear)\n- **new_event_datetime**: nova data/hora em ISO 8601 UTC (se remarcar). Lembre: UTC = horário local + 3h\n- **new_duration_minutes**: nova duração em minutos (se alterar duração). Ex: \"2 horas\" = 120\n- **add_attendees**: array de emails para ADICIONAR como convidados. Ex: [\"joao@email.com\"]\n- **remove_attendees**: array de emails para REMOVER dos convidados. Ex: [\"joao@email.com\"]\n\n## config_type: \"lead_time\"\nUse quando o usuário quer alterar o tempo de antecedência das notificações.\n- \"me avisa 10 minutos antes\" → lead_time_minutes: 10\n- \"quero ser avisado 30 min antes\" → lead_time_minutes: 30\n\n## config_type: \"master_password\"\nUse quando o usuário quer definir ou alterar a contrasenha de segurança.\n- \"minha contrasenha é 1234\" → master_password: \"1234\"\n- \"cadastrar contrasenha: abc123\" → master_password: \"abc123\"\n- \"definir contrasenha segura\" → master_password: \"segura\"\n\n## config_type: \"timezone\"\nUse quando o usuário quer alterar o fuso horário.\n\n## Conversão para UTC\nUsuário está em GMT-3. Para UTC, some 3 horas ao horário local.\nExemplo: \"10:00\" local = \"13:00:00Z\" UTC.\n\n## Compreensão temporal\n- \"hoje\": data atual\n- \"amanhã\": dia seguinte\n- \"segunda\", \"terça\", etc.: próximo dia correspondente\n- \"de manhã\": 08:00, \"de tarde\": 14:00, \"de noite\": 20:00\n\n## EXEMPLOS COMPLETOS DE SAÍDA:\n\nMensagem: \"cancela a reunião de hoje as 18:30\"\n{\"config_type\": \"manage_item\", \"lead_time_minutes\": null, \"timezone\": null, \"master_password\": null, \"item_action\": \"cancel\", \"item_search\": \"reunião\", \"modify_fields\": null, \"confirmation_text\": \"Reunião cancelada!\"}\n\nMensagem: \"essa tarefa foi concluída. pode marcar como feito\"\n{\"config_type\": \"manage_item\", \"lead_time_minutes\": null, \"timezone\": null, \"master_password\": null, \"item_action\": \"done\", \"item_search\": \"bombeiros\", \"modify_fields\": null, \"confirmation_text\": \"Tarefa marcada como concluída!\"}\n\nMensagem: \"adicione na reunião o convidado joao@email.com e maria@email.com, ela terá 2:00 de duração\"\n{\"config_type\": \"manage_item\", \"lead_time_minutes\": null, \"timezone\": null, \"master_password\": null, \"item_action\": \"modify\", \"item_search\": \"reunião\", \"modify_fields\": {\"add_attendees\": [\"joao@email.com\", \"maria@email.com\"], \"new_duration_minutes\": 120}, \"confirmation_text\": \"Reunião atualizada com convidados e duração de 2h!\"}\n\nMensagem: \"muda a reunião para amanhã às 10h\"\n{\"config_type\": \"manage_item\", \"lead_time_minutes\": null, \"timezone\": null, \"master_password\": null, \"item_action\": \"modify\", \"item_search\": \"reunião\", \"modify_fields\": {\"new_event_datetime\": \"2026-02-19T13:00:00Z\"}, \"confirmation_text\": \"Reunião remarcada para amanhã às 10h!\"}\n\nMensagem: \"me avisa 30 minutos antes\"\n{\"config_type\": \"lead_time\", \"lead_time_minutes\": 30, \"timezone\": null, \"master_password\": null, \"item_action\": null, \"item_search\": null, \"modify_fields\": null, \"confirmation_text\": \"Pronto! Vou te avisar 30 minutos antes dos compromissos.\"}\n\nMensagem: \"minha contrasenha é super123\"\n{\"config_type\": \"master_password\", \"lead_time_minutes\": null, \"timezone\": null, \"master_password\": \"super123\", \"item_action\": null, \"item_search\": null, \"modify_fields\": null, \"confirmation_text\": \"Contrasenha cadastrada com sucesso! 🔐\"}\n\n## REGRAS CRÍTICAS\n1. SEMPRE preencha item_action e item_search quando config_type for \"manage_item\"\n2. NUNCA retorne item_action=null quando o usuário pede para cancelar, concluir ou modificar algo\n3. Se a mensagem menciona um item específico, SEMPRE extraia o item_search\n4. Retorne APENAS o JSON, sem texto extra\n5. Todos os campos devem estar presentes no JSON"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -208,
+        304
+      ],
+      "id": "agent-config",
+      "name": "Agent_Config"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_ValidateAndPrepare V3 - handles both object and string agent output\nconst envelope = $('TRF_PrepareContext').item.json.envelope;\nconst agentOutput = $('Agent_Config').item.json;\n\nlet config_type = 'lead_time';\nlet lead_time_minutes = null;\nlet timezone = null;\nlet master_password = null;\nlet confirmation_text = '';\nlet is_valid = true;\nlet validation_error = '';\nlet item_action = null;\nlet item_search = null;\nlet modify_fields = null;\nlet add_attendees = null;\nlet remove_attendees = null;\n\ntry {\n  let parsed = agentOutput;\n  \n  // If output is nested under .output key\n  if (agentOutput.output) {\n    const out = agentOutput.output;\n    // If it's already an object, use directly\n    if (typeof out === 'object' && out !== null) {\n      parsed = out;\n    } else if (typeof out === 'string') {\n      // If it's a string, try to parse as JSON\n      const cleaned = out.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n      parsed = JSON.parse(cleaned);\n    }\n  }\n  \n  config_type = parsed.config_type || 'lead_time';\n  lead_time_minutes = parsed.lead_time_minutes;\n  timezone = parsed.timezone;\n  master_password = parsed.master_password;\n  confirmation_text = parsed.confirmation_text || '';\n  item_action = parsed.item_action || null;\n  item_search = parsed.item_search || null;\n  modify_fields = parsed.modify_fields || null;\n  add_attendees = parsed.add_attendees || null;\n  remove_attendees = parsed.remove_attendees || null;\n} catch (e) {\n  is_valid = false;\n  validation_error = 'Failed to parse agent output: ' + e.message;\n}\n\n// Build upsert data based on config_type\nconst upsert_data = {\n  owner_phone: envelope.from_phone,\n  updated_at: new Date().toISOString()\n};\n\nif (config_type === 'lead_time') {\n  if (!lead_time_minutes || lead_time_minutes < 1 || lead_time_minutes > 1440) {\n    lead_time_minutes = 15;\n  }\n  upsert_data.lead_time_default_seconds = lead_time_minutes * 60;\n  if (timezone) upsert_data.timezone = timezone;\n  if (!confirmation_text) {\n    confirmation_text = 'Pronto! Vou te avisar ' + lead_time_minutes + ' minutos antes dos compromissos.';\n  }\n} else if (config_type === 'master_password') {\n  if (!master_password || master_password.length < 2 || master_password.length > 50) {\n    is_valid = false;\n    validation_error = 'Contrasenha inválida. Deve ter entre 2 e 50 caracteres.';\n    confirmation_text = 'A contrasenha precisa ter entre 2 e 50 caracteres. Tente novamente.';\n  } else {\n    upsert_data.master_password = master_password;\n    if (!confirmation_text) {\n      confirmation_text = '🔐 Contrasenha cadastrada com sucesso! Suas notas sensíveis agora estão protegidas.';\n    }\n  }\n} else if (config_type === 'timezone') {\n  if (timezone) {\n    upsert_data.timezone = timezone;\n    if (!confirmation_text) {\n      confirmation_text = '🌎 Fuso horário atualizado para ' + timezone + '.';\n    }\n  } else {\n    is_valid = false;\n    validation_error = 'Timezone não informado';\n    confirmation_text = 'Não entendi o fuso horário. Pode repetir?';\n  }\n} else if (config_type === 'manage_item') {\n  if (!item_action || !item_search) {\n    is_valid = false;\n    validation_error = 'Ação ou busca não identificada';\n    confirmation_text = 'Não consegui identificar o que você quer alterar. Pode ser mais específico?';\n  } else {\n    if (!confirmation_text) {\n      confirmation_text = 'Processando ' + item_action + ' de \"' + item_search + '\"...';\n    }\n  }\n}\n\nreturn [{\n  json: {\n    envelope: envelope,\n    config: {\n      config_type: config_type,\n      item_action: item_action,\n      item_search: item_search,\n      modify_fields: modify_fields,\n      add_attendees: add_attendees,\n      remove_attendees: remove_attendees,\n      lead_time_minutes: lead_time_minutes,\n      timezone: timezone,\n      master_password: master_password ? '***' : null,\n      confirmation_text: confirmation_text\n    },\n    validation: {\n      is_valid: is_valid,\n      error: validation_error\n    },\n    upsert_data: upsert_data\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        304
+      ],
+      "id": "validate-prepare",
+      "name": "TRF_ValidateAndPrepare"
+    },
+    {
+      "parameters": {
+        "jsCode": "// DB_UpsertPrefs V6 - Save preferences including master_password (secure env vars)\nconst prepared = $('TRF_ValidateAndPrepare').item.json;\nconst upsertData = prepared.upsert_data;\nconst config = prepared.config;\nconst supabaseUrl = 'https://chtkfksjqcvlxpgyzlsf.supabase.co';\nconst supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNodGtma3NqcWN2bHhwZ3l6bHNmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjMwODU1NywiZXhwIjoyMDg3ODg0NTU3fQ.DM9wL7MlXRBuM_IYDk3pQ_q-WE7DYuwpqTTywg5A05U';\n\nif (!supabaseUrl || !supabaseKey) {\n  return [{ json: { success: false, error: 'Missing SUPABASE_URL or SUPABASE_KEY environment variables' } }];\n}\n\nconst headers = {\n  apikey: supabaseKey,\n  Authorization: 'Bearer ' + supabaseKey,\n  'Content-Type': 'application/json',\n  Prefer: 'return=representation'\n};\n\nconst ownerPhone = upsertData.owner_phone;\nconst body = { updated_at: new Date().toISOString() };\nconst configType = config.config_type;\n\nif (configType === 'master_password' && upsertData.master_password) {\n  body.lead_time_scope = 'master_pwd:' + upsertData.master_password;\n} else if (configType === 'lead_time') {\n  if (upsertData.lead_time_default_seconds) {\n    body.lead_time_minutes = Math.round(upsertData.lead_time_default_seconds / 60);\n  } else if (config.lead_time_minutes) {\n    body.lead_time_minutes = config.lead_time_minutes;\n  }\n} else if (configType === 'timezone' && upsertData.timezone) {\n  body.timezone = upsertData.timezone;\n}\n\ntry {\n  const existing = await this.helpers.httpRequest({\n    method: 'GET',\n    url: supabaseUrl + '/rest/v1/user_prefs?owner_phone=eq.' + encodeURIComponent(ownerPhone) + '&select=owner_phone',\n    headers: { apikey: supabaseKey, Authorization: 'Bearer ' + supabaseKey },\n    json: true\n  });\n\n  let result;\n  if (existing && existing.length > 0) {\n    result = await this.helpers.httpRequest({\n      method: 'PATCH',\n      url: supabaseUrl + '/rest/v1/user_prefs?owner_phone=eq.' + encodeURIComponent(ownerPhone),\n      headers,\n      body,\n      json: true\n    });\n  } else {\n    body.owner_phone = ownerPhone;\n    result = await this.helpers.httpRequest({\n      method: 'POST',\n      url: supabaseUrl + '/rest/v1/user_prefs',\n      headers,\n      body,\n      json: true\n    });\n  }\n\n  return [{ json: { success: true, data: result } }];\n} catch (e) {\n  return [{ json: { success: false, error: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        304
+      ],
+      "id": "db-upsert",
+      "name": "DB_UpsertPrefs"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_FormatResponse (V5: robust manage_item + modify + error handling)\nconst prepared = $('TRF_ValidateAndPrepare').item.json;\nconst config = prepared.config;\nconst validation = prepared.validation;\nlet responseText = '';\n\n// If validation failed, return the error message\nif (!validation.is_valid) {\n  responseText = config.confirmation_text || 'Não entendi o que você quer configurar. Pode repetir?';\n  return [{\n    json: {\n      envelope: prepared.envelope,\n      agent_response: {\n        text: responseText,\n        agent: 'CONFIG',\n        config_updated: { config_type: config.config_type }\n      }\n    }\n  }];\n}\n\n// Handle manage_item results\nif (config.config_type === 'manage_item') {\n  try {\n    const manageResult = $('DB_ManageItem').item.json;\n    \n    if (manageResult._error) {\n      responseText = manageResult._error;\n    } else if (manageResult.title) {\n      const action = manageResult.action || config.item_action || 'atualizado';\n      const actionLabels = {\n        cancel: 'cancelado',\n        done: 'concluído',\n        delete: 'excluído',\n        modify: 'atualizado'\n      };\n      const actionEmojis = {\n        cancel: '❌',\n        done: '✅',\n        delete: '🗑️',\n        modify: '✏️'\n      };\n      const emoji = actionEmojis[action] || '✏️';\n      const label = actionLabels[action] || 'atualizado';\n      responseText = emoji + ' \"' + manageResult.title + '\" ' + label + ' com sucesso!';\n      \n      // Add modify details\n      if (action === 'modify' && manageResult.modify_fields) {\n        const mf = manageResult.modify_fields;\n        const details = [];\n        if (mf.new_title) details.push('Título: ' + mf.new_title);\n        if (mf.new_event_datetime) {\n          const dt = new Date(mf.new_event_datetime);\n          details.push('Data/hora: ' + dt.toLocaleString('pt-BR', {timeZone: 'America/Belem'}));\n        }\n        if (mf.new_duration_minutes) details.push('Duração: ' + mf.new_duration_minutes + ' min');\n        if (mf.add_attendees && mf.add_attendees.length > 0) details.push('Convidados adicionados: ' + mf.add_attendees.join(', '));\n        if (mf.remove_attendees && mf.remove_attendees.length > 0) details.push('Convidados removidos: ' + mf.remove_attendees.join(', '));\n        \n        if (details.length > 0) {\n          responseText += '\\n' + details.join('\\n');\n        }\n      }\n      \n      // Add Google sync result\n      try {\n        const syncResult = $('TRF_GoogleSync').item.json;\n        if (syncResult._google_sync_result) {\n          responseText += syncResult._google_sync_result;\n        }\n      } catch(e) {}\n    }\n  } catch(e) {\n    responseText = config.confirmation_text || 'Erro ao processar a ação.';\n  }\n} else {\n  // Preference updates (lead_time, timezone, master_password)\n  responseText = config.confirmation_text || 'Configuração atualizada!';\n}\n\nreturn [{\n  json: {\n    envelope: prepared.envelope,\n    agent_response: {\n      text: responseText,\n      agent: 'CONFIG',\n      config_updated: {\n        config_type: config.config_type,\n        lead_time_minutes: config.lead_time_minutes,\n        timezone: config.timezone,\n        master_password_set: config.master_password ? true : false\n      }\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        160
+      ],
+      "id": "format-response",
+      "name": "TRF_FormatResponse"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "if_is_manage_item",
+              "leftValue": "={{ $json.config.config_type }}",
+              "rightValue": "manage_item",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        464,
+        304
+      ],
+      "id": "if_manage_item_001",
+      "name": "IF_IsManageItem"
+    },
+    {
+      "parameters": {
+        "jsCode": "// DB_ManageItem V6 - improved fuzzy search with stopwords + keyword weighting\nconst prepared = $('TRF_ValidateAndPrepare').item.json;\nconst config = prepared.config;\nconst envelope = prepared.envelope;\nconst action = config.item_action;\nconst searchText = config.item_search;\nconst modifyFields = config.modify_fields || {};\n\nif (!action || !searchText) {\n  return [{ json: { _error: 'Não entendi qual item você quer gerenciar. Pode repetir?' } }];\n}\n\nconst supabaseUrl = 'https://chtkfksjqcvlxpgyzlsf.supabase.co';\nconst supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNodGtma3NqcWN2bHhwZ3l6bHNmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjMwODU1NywiZXhwIjoyMDg3ODg0NTU3fQ.DM9wL7MlXRBuM_IYDk3pQ_q-WE7DYuwpqTTywg5A05U';\nconst headers = {\n  apikey: supabaseKey,\n  Authorization: 'Bearer ' + supabaseKey,\n  'Content-Type': 'application/json',\n  Prefer: 'return=representation'\n};\nconst ownerPhone = envelope.from_phone;\n\n// Stopwords to ignore in search\nconst STOPWORDS = new Set([\n  'a', 'o', 'e', 'de', 'do', 'da', 'dos', 'das', 'no', 'na', 'nos', 'nas',\n  'em', 'um', 'uma', 'uns', 'umas', 'para', 'pra', 'pro', 'por', 'com',\n  'sem', 'que', 'se', 'ao', 'aos', 'dia', 'até', 'ate', 'meu', 'minha',\n  'esse', 'essa', 'este', 'esta', 'aquele', 'aquela', 'ele', 'ela',\n  'me', 'te', 'lhe', 'nos', 'vos', 'lhes', 'eu', 'tu', 'nós', 'vós',\n  'cancela', 'cancelar', 'cancele', 'exclui', 'excluir', 'exclua',\n  'remove', 'remover', 'remova', 'deleta', 'deletar', 'delete',\n  'marca', 'marcar', 'marque', 'como', 'feito', 'feita', 'concluido', 'concluida',\n  'altera', 'alterar', 'altere', 'modifica', 'modificar', 'modifique',\n  'muda', 'mudar', 'mude', 'troca', 'trocar', 'troque',\n  'adiciona', 'adicionar', 'adicione', 'add',\n  'reuniao', 'reunião', 'tarefa', 'nota', 'lembrete', 'evento'\n]);\n\ntry {\n  // Extract meaningful keywords (remove stopwords, short words)\n  const keywords = searchText\n    .toLowerCase()\n    .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '') // remove accents for matching\n    .replace(/[^a-z0-9\\s]/gi, '')\n    .split(/\\s+/)\n    .filter(w => w.length > 1 && !STOPWORDS.has(w));\n\n  // Also keep accented version for ilike\n  const keywordsOriginal = searchText\n    .toLowerCase()\n    .replace(/[^a-záàâãéèêíïóôõöúçñ0-9\\s]/gi, '')\n    .split(/\\s+/)\n    .filter(w => w.length > 1);\n\n  // Strategy 1: Direct ilike search with cleaned search text\n  const cleanSearch = searchText\n    .replace(/^(cancela|cancelar|exclui|excluir|marca|marcar|altera|alterar|modifica|modificar|remove|remover|adiciona|adicionar)\\s+/i, '')\n    .replace(/^(a |o |as |os |meu |minha |esse |essa |este |esta )/i, '')\n    .replace(/^(reuni[aã]o|tarefa|nota|lembrete|evento)[:\\s]*/i, '')\n    .trim();\n\n  let searchResp = [];\n  if (cleanSearch.length > 2) {\n    searchResp = await this.helpers.httpRequest({\n      method: 'GET',\n      url: supabaseUrl + '/rest/v1/items?owner_phone=eq.' +\n        encodeURIComponent(ownerPhone) +\n        '&status=neq.cancelled&title=ilike.*' +\n        encodeURIComponent(cleanSearch) +\n        '*&order=created_at.desc&limit=5',\n      headers,\n      json: true\n    });\n  }\n\n  // Strategy 2: Keyword-weighted fuzzy search on all items\n  if (!searchResp || searchResp.length === 0) {\n    const allItems = await this.helpers.httpRequest({\n      method: 'GET',\n      url: supabaseUrl + '/rest/v1/items?owner_phone=eq.' +\n        encodeURIComponent(ownerPhone) +\n        '&status=neq.cancelled&order=created_at.desc&limit=50',\n      headers,\n      json: true\n    });\n\n    const scored = allItems.map(item => {\n      const titleLower = (item.title || '').toLowerCase()\n        .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '');\n      let score = 0;\n      let matchedKeywords = 0;\n\n      for (const kw of keywords) {\n        if (titleLower.includes(kw)) {\n          // Weight by keyword length: longer keywords are more specific\n          score += kw.length;\n          matchedKeywords++;\n        }\n      }\n\n      // Bonus: percentage of keywords matched\n      const matchRatio = keywords.length > 0 ? matchedKeywords / keywords.length : 0;\n      score *= (1 + matchRatio);\n\n      return { item, score, matchedKeywords, matchRatio };\n    })\n    .filter(s => s.score > 0)\n    .sort((a, b) => {\n      // Primary: score descending\n      if (b.score !== a.score) return b.score - a.score;\n      // Secondary: match ratio descending\n      if (b.matchRatio !== a.matchRatio) return b.matchRatio - a.matchRatio;\n      // Tertiary: most recent first\n      return new Date(b.item.created_at || 0) - new Date(a.item.created_at || 0);\n    });\n\n    if (scored.length > 0) {\n      searchResp = [scored[0].item];\n    }\n  }\n\n  if (!searchResp || searchResp.length === 0) {\n    return [{ json: { _error: 'Não encontrei nenhum item com \"' + searchText + '\". Verifique o nome e tente novamente.' } }];\n  }\n\n  const bestMatch = searchResp[0];\n  const updateBody = { updated_at: new Date().toISOString() };\n  let needsGCalDelete = false;\n  let needsGCalUpdate = false;\n  let needsGTasksDelete = false;\n  let needsGTasksDone = false;\n\n  if (action === 'cancel' || action === 'delete') {\n    updateBody.status = 'cancelled';\n    needsGCalDelete = !!bestMatch.google_calendar_event_id;\n    needsGTasksDelete = !!bestMatch.google_tasks_task_id;\n  } else if (action === 'done') {\n    updateBody.status = 'done';\n    updateBody.completed_at = new Date().toISOString();\n    needsGTasksDone = !!bestMatch.google_tasks_task_id;\n  } else if (action === 'modify') {\n    needsGCalUpdate = !!bestMatch.google_calendar_event_id;\n    if (modifyFields.new_title) updateBody.title = modifyFields.new_title;\n    if (modifyFields.new_event_datetime) updateBody.event_datetime = modifyFields.new_event_datetime;\n    if (modifyFields.new_attendees) updateBody.attendees = modifyFields.new_attendees;\n  }\n\n  await this.helpers.httpRequest({\n    method: 'PATCH',\n    url: supabaseUrl + '/rest/v1/items?id=eq.' + bestMatch.id,\n    headers,\n    body: updateBody,\n    json: true\n  });\n\n  return [{\n    json: {\n      title: modifyFields.new_title || bestMatch.title,\n      type: bestMatch.type,\n      action,\n      new_status: updateBody.status || bestMatch.status,\n      item_id: bestMatch.id,\n      google_calendar_event_id: bestMatch.google_calendar_event_id || null,\n      google_tasks_task_id: bestMatch.google_tasks_task_id || null,\n      modify_fields: config.modify_fields || null,\n      _needs_google_calendar_delete: needsGCalDelete,\n      _needs_google_tasks_delete: needsGTasksDelete,\n      _needs_google_calendar_update: needsGCalUpdate,\n      _needs_google_tasks_done: needsGTasksDone\n    }\n  }];\n} catch (e) {\n  return [{ json: { _error: 'Erro ao buscar item: ' + e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        160
+      ],
+      "id": "db_manage_item_001",
+      "name": "DB_ManageItem"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare chatInput for Agent_Config\nconst input = $('TRG_FromOrchestrator').item.json;\nlet envelope = input.envelope;\n// GUARDRAIL: envelope pode vir como string\nif (typeof envelope === 'string') {\n  try { envelope = JSON.parse(envelope); } catch(e) { envelope = { user_message: envelope, text_raw: envelope }; }\n}\nconst userMessage = envelope.user_message || envelope.text_raw || 'mensagem vazia';\nconst ownerPhone = envelope.from_phone || '';\nconst tz = (envelope.prefs && envelope.prefs.timezone) || 'America/Belem';\n\n// Build date/time context\nconst now = new Date();\nconst localOptions = { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false };\nlet localTime;\ntry {\n  localTime = now.toLocaleString('pt-BR', localOptions);\n} catch(e) {\n  localTime = now.toISOString();\n}\n\n// Build chatInput with context\nconst chatInput = `Analise a mensagem do usuário e extraia a configuração.\nMENSAGEM: ${userMessage}\nDATA/HORA LOCAL: ${localTime}\nFUSO HORÁRIO: ${tz} (GMT-3)\nConverta horários locais para UTC somando 3 horas.`;\n\nreturn [{\n  json: {\n    chatInput: chatInput,\n    envelope: envelope,\n    owner_phone: ownerPhone\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -304,
+        304
+      ],
+      "id": "prep-context-wf05",
+      "name": "TRF_PrepareContext"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Route to the correct Google sync operation based on flags from DB_ManageItem\nconst item = $json;\nconst result = { ...item, _google_sync_result: '' };\n\n// Pass through - the IF nodes after this will route to the correct HTTP Request\nreturn [{ json: result }];"
+      },
+      "id": "gsync-router",
+      "name": "TRF_GoogleSyncRouter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1008,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": ""
+          },
+          "conditions": [
+            {
+              "id": "gcal-del-cond",
+              "leftValue": "={{ $json._needs_google_calendar_delete }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "if-gcal-delete",
+      "name": "IF_NeedsGCalDelete",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1232,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": ""
+          },
+          "conditions": [
+            {
+              "id": "gcal-upd-cond",
+              "leftValue": "={{ $json._needs_google_calendar_update }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "if-gcal-update",
+      "name": "IF_NeedsGCalUpdate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1232,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": ""
+          },
+          "conditions": [
+            {
+              "id": "gtasks-done-cond",
+              "leftValue": "={{ $json._needs_google_tasks_done }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "if-gtasks-done",
+      "name": "IF_NeedsGTasksDone",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1232,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "=https://www.googleapis.com/calendar/v3/calendars/marcio.ma@redesupereco.com/events/{{ $json.google_calendar_event_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "options": {}
+      },
+      "id": "gcal-delete-event",
+      "name": "GCal_DeleteEvent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1488,
+        -48
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "EjpsnzbHBHBfm42E",
+          "name": "Infra_Calendar"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://www.googleapis.com/calendar/v3/calendars/marcio.ma@redesupereco.com/events/{{ $json.google_calendar_event_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ (function() { const mf = $json.modify_fields || {}; const body = {}; if (mf.new_title) body.summary = mf.new_title; if (mf.new_event_datetime) { body.start = { dateTime: mf.new_event_datetime, timeZone: 'America/Belem' }; const endMs = new Date(mf.new_event_datetime).getTime() + 60*60*1000; body.end = { dateTime: new Date(endMs).toISOString(), timeZone: 'America/Belem' }; } if (mf.new_attendees) { body.attendees = mf.new_attendees.map(e => ({ email: e.trim() })); } return body; })() }}",
+        "options": {}
+      },
+      "id": "gcal-update-event",
+      "name": "GCal_UpdateEvent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1488,
+        160
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "EjpsnzbHBHBfm42E",
+          "name": "Infra_Calendar"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://tasks.googleapis.com/tasks/v1/lists/MDY5NjAyODM5OTIyNzk0NjM4MzM6MDow/tasks/{{ $json.google_tasks_task_id }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleTasksOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { status: 'completed' } }}",
+        "options": {}
+      },
+      "id": "gtasks-complete-task",
+      "name": "GTasks_CompleteTask",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1488,
+        368
+      ],
+      "credentials": {
+        "googleTasksOAuth2Api": {
+          "id": "mw82h3M70MIvp8It",
+          "name": "Infra_Tasks"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge Google sync results back into the item data\nconst item = $('DB_ManageItem').item.json;\nlet syncResult = '';\n\n// Check if Google Calendar delete succeeded\nif (item._needs_google_calendar_delete) {\n  try {\n    const gcalResult = $('GCal_DeleteEvent').item.json;\n    if (gcalResult.error) {\n      syncResult += '\\n⚠️ Não foi possível remover do Google Calendar: ' + (gcalResult.error.message || 'erro desconhecido');\n    } else {\n      syncResult += '\\n✅ Removido do Google Calendar';\n    }\n  } catch(e) {\n    syncResult += '\\n✅ Removido do Google Calendar';\n  }\n}\n\nif (item._needs_google_calendar_update) {\n  try {\n    const gcalResult = $('GCal_UpdateEvent').item.json;\n    if (gcalResult.error) {\n      syncResult += '\\n⚠️ Não foi possível atualizar no Google Calendar: ' + (gcalResult.error.message || 'erro desconhecido');\n    } else {\n      syncResult += '\\n✅ Atualizado no Google Calendar';\n    }\n  } catch(e) {\n    syncResult += '\\n✅ Atualizado no Google Calendar';\n  }\n}\n\nif (item._needs_google_tasks_done) {\n  try {\n    const gtResult = $('GTasks_CompleteTask').item.json;\n    if (gtResult.error) {\n      syncResult += '\\n⚠️ Não foi possível concluir no Google Tasks: ' + (gtResult.error.message || 'erro desconhecido');\n    } else {\n      syncResult += '\\n✅ Concluída no Google Tasks';\n    }\n  } catch(e) {\n    syncResult += '\\n✅ Concluída no Google Tasks';\n  }\n}\n\nreturn [{ json: { ...item, _google_sync_result: syncResult } }];"
+      },
+      "id": "merge-google-result",
+      "name": "TRF_MergeGoogleResult",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1728,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "path": "d753a888-88f2-4f7f-afa0-18cfa15524b9",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "e33c2fab-a64e-456c-9f7a-9c12ae061598",
+      "name": "Webhook",
+      "webhookId": "d753a888-88f2-4f7f-afa0-18cfa15524b9"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TRG_FromOrchestrator": {
+      "main": [
+        [
+          {
+            "node": "TRF_PrepareContext",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent_Config": {
+      "main": [
+        [
+          {
+            "node": "TRF_ValidateAndPrepare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_ValidateAndPrepare": {
+      "main": [
+        [
+          {
+            "node": "IF_IsManageItem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_UpsertPrefs": {
+      "main": [
+        [
+          {
+            "node": "TRF_FormatResponse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM_Primary": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agent_Config",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM_Fallback": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agent_Config",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Agent_Config",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parser_Output": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Agent_Config",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM_Retry": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Parser_Output",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_IsManageItem": {
+      "main": [
+        [
+          {
+            "node": "DB_ManageItem",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB_UpsertPrefs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_ManageItem": {
+      "main": [
+        [
+          {
+            "node": "TRF_GoogleSyncRouter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_PrepareContext": {
+      "main": [
+        [
+          {
+            "node": "Agent_Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_GoogleSyncRouter": {
+      "main": [
+        [
+          {
+            "node": "IF_NeedsGCalDelete",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "IF_NeedsGCalUpdate",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "IF_NeedsGTasksDone",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_NeedsGCalDelete": {
+      "main": [
+        [
+          {
+            "node": "GCal_DeleteEvent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "TRF_MergeGoogleResult",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_NeedsGCalUpdate": {
+      "main": [
+        [
+          {
+            "node": "GCal_UpdateEvent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "TRF_MergeGoogleResult",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_NeedsGTasksDone": {
+      "main": [
+        [
+          {
+            "node": "GTasks_CompleteTask",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "TRF_MergeGoogleResult",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GCal_DeleteEvent": {
+      "main": [
+        [
+          {
+            "node": "TRF_MergeGoogleResult",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GCal_UpdateEvent": {
+      "main": [
+        [
+          {
+            "node": "TRF_MergeGoogleResult",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GTasks_CompleteTask": {
+      "main": [
+        [
+          {
+            "node": "TRF_MergeGoogleResult",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_MergeGoogleResult": {
+      "main": [
+        [
+          {
+            "node": "TRF_FormatResponse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "versionId": "7e5e8d8e-a90b-470b-9766-528b93c03cc5",
+  "meta": {
+    "instanceId": "e5b5be90f9458642dd4b6a612950f8d170694c02cfe60ae6b638142ad8aa31e6"
+  },
+  "id": "pvfkmn4dqqXAW4EA",
+  "tags": [
+    {
+      "updatedAt": "2026-02-28T20:43:57.398Z",
+      "createdAt": "2026-02-28T20:43:57.398Z",
+      "id": "L6OShbFn4DQIWFov",
+      "name": "v3 EMII - staging"
+    }
+  ]
+}

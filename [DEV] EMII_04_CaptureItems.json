@@ -1,0 +1,348 @@
+{
+  "name": "[DEV] EMII_04_CaptureItems",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "TRG_ExecuteWorkflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        304
+      ],
+      "id": "trg-execute-workflow"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "name": "LOOP_Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        464,
+        304
+      ],
+      "id": "loop-items"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract current item from batch\nconst inputData = $input.first().json;\nconst items = inputData.items || [];\nconst batchIndex = $input.context.nodesExecutionData['LOOP_Items'][0].executionData.contextData.batchIndex || 0;\nconst currentItem = items[batchIndex] || {};\n\nreturn [{\n  json: {\n    ...inputData,\n    current_item: currentItem,\n    item_index: batchIndex\n  }\n}];"
+      },
+      "name": "TRF_ExtractCurrentItem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        304
+      ],
+      "id": "trf-extract-current-item"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "items",
+        "limit": 1,
+        "filterType": "string",
+        "filterString": "=owner_phone=eq.{{ $json.owner_phone }}&source_message_id=eq.{{ $json.source_message_id }}&title=eq.{{ $json.current_item.title }}"
+      },
+      "name": "DB_CheckDuplicate",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        912,
+        304
+      ],
+      "id": "db-check-duplicate",
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "duplicate-check",
+              "leftValue": "={{ $json.length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "CHK_IsNotDuplicate",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        304
+      ],
+      "id": "chk-is-not-duplicate"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare item for insertion\nconst inputData = $('TRF_ExtractCurrentItem').first().json;\nconst item = inputData.current_item;\nconst leadTime = inputData.lead_time_default_seconds || 900;\n\nlet notify_at = null;\nif (item.type === 'reminder' && item.due_at) {\n  const dueDate = new Date(item.due_at);\n  const notifyDate = new Date(dueDate.getTime() - (leadTime * 1000));\n  notify_at = notifyDate.toISOString();\n}\n\nreturn [{\n  json: {\n    owner_phone: inputData.owner_phone,\n    source_message_id: inputData.source_message_id,\n    type: item.type || 'task',\n    title: item.title || 'Sem título',\n    details: item.details || null,\n    status: 'open',\n    due_at: item.due_at || null,\n    notify_at: notify_at\n  }\n}];"
+      },
+      "name": "TRF_PrepareItem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        208
+      ],
+      "id": "trf-prepare-item"
+    },
+    {
+      "parameters": {
+        "tableId": "items",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "owner_phone",
+              "fieldValue": "={{ $json.owner_phone }}"
+            },
+            {
+              "fieldId": "source_message_id",
+              "fieldValue": "={{ $json.source_message_id }}"
+            },
+            {
+              "fieldId": "type",
+              "fieldValue": "={{ $json.type }}"
+            },
+            {
+              "fieldId": "title",
+              "fieldValue": "={{ $json.title }}"
+            },
+            {
+              "fieldId": "details",
+              "fieldValue": "={{ $json.details }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "={{ $json.status }}"
+            },
+            {
+              "fieldId": "due_at",
+              "fieldValue": "={{ $json.due_at }}"
+            },
+            {
+              "fieldId": "notify_at",
+              "fieldValue": "={{ $json.notify_at }}"
+            }
+          ]
+        }
+      },
+      "name": "DB_CreateItem",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1568,
+        208
+      ],
+      "id": "db-create-item",
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mark as created\nconst inputData = $('TRF_ExtractCurrentItem').first().json;\nreturn [{\n  json: {\n    ...inputData,\n    item_created: true\n  }\n}];"
+      },
+      "name": "TRF_MarkCreated",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        208
+      ],
+      "id": "trf-mark-created"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mark as skipped (duplicate)\nconst inputData = $('TRF_ExtractCurrentItem').first().json;\nreturn [{\n  json: {\n    ...inputData,\n    item_created: false\n  }\n}];"
+      },
+      "name": "TRF_MarkSkipped",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        400
+      ],
+      "id": "trf-mark-skipped"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build summary text\nconst allData = $input.all();\nconst createdItems = allData.filter(d => d.json.item_created);\nconst createdCount = createdItems.length;\n\nlet summaryText = '';\nif (createdCount === 0) {\n  summaryText = '✅ Nenhum item novo criado (já existiam).';\n} else if (createdCount === 1) {\n  const item = createdItems[0].json.current_item;\n  summaryText = `✅ 1 item registrado: ${item.title}`;\n} else {\n  summaryText = `✅ ${createdCount} itens registrados:\\n`;\n  createdItems.forEach((d, idx) => {\n    const item = d.json.current_item;\n    summaryText += `(${idx + 1}) ${item.title}\\n`;\n  });\n}\n\nreturn [{\n  json: {\n    created_count: createdCount,\n    total_items: allData.length,\n    summary_text: summaryText.trim()\n  }\n}];"
+      },
+      "name": "TRF_BuildSummary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        304
+      ],
+      "id": "trf-build-summary"
+    },
+    {
+      "parameters": {
+        "path": "57b308a6-52b6-4bb9-8a35-837aec3b7d86",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        176,
+        704
+      ],
+      "id": "ee3ba117-fa84-4605-9524-677afd667c6d",
+      "name": "Webhook",
+      "webhookId": "57b308a6-52b6-4bb9-8a35-837aec3b7d86"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TRG_ExecuteWorkflow": {
+      "main": [
+        [
+          {
+            "node": "LOOP_Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LOOP_Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "TRF_BuildSummary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_ExtractCurrentItem": {
+      "main": [
+        [
+          {
+            "node": "DB_CheckDuplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_CheckDuplicate": {
+      "main": [
+        [
+          {
+            "node": "CHK_IsNotDuplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CHK_IsNotDuplicate": {
+      "main": [
+        [
+          {
+            "node": "TRF_PrepareItem",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "TRF_MarkSkipped",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_PrepareItem": {
+      "main": [
+        [
+          {
+            "node": "DB_CreateItem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_CreateItem": {
+      "main": [
+        [
+          {
+            "node": "TRF_MarkCreated",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_MarkCreated": {
+      "main": [
+        [
+          {
+            "node": "LOOP_Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_MarkSkipped": {
+      "main": [
+        [
+          {
+            "node": "LOOP_Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "versionId": "017fdfa5-a316-4c0a-8273-0ce45c227cb4",
+  "meta": {
+    "instanceId": "e5b5be90f9458642dd4b6a612950f8d170694c02cfe60ae6b638142ad8aa31e6"
+  },
+  "id": "XSlzV5OAs98QOF8x",
+  "tags": [
+    {
+      "updatedAt": "2026-02-28T20:43:57.398Z",
+      "createdAt": "2026-02-28T20:43:57.398Z",
+      "id": "L6OShbFn4DQIWFov",
+      "name": "v3 EMII - staging"
+    }
+  ]
+}

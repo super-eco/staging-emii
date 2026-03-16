@@ -1,0 +1,389 @@
+{
+  "name": "[DEV] EMII_03_KnowledgeRetrieval_AGENTv1",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-knowledge",
+      "name": "TRG_ExecuteWorkflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1,
+      "position": [
+        112,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "items",
+        "filterType": "string",
+        "filterString": "=owner_phone=eq.{{ $json.from_phone }}&type=eq.note&status=eq.open"
+      },
+      "id": "db-fetch-notes-001",
+      "name": "DB_FetchNotes",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        304,
+        304
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format notes for LLM\n// Get input data from Execute Workflow trigger\nconst inputData = $('TRG_ExecuteWorkflow').first().json;\nconst allNotes = $input.all();\n\n// Extract notes\nconst notes = allNotes.map(item => item.json);\n\nif (!notes || notes.length === 0) {\n  return [{\n    json: {\n      ...inputData,\n      notes_text: \"Nenhuma nota encontrada.\",\n      has_notes: false,\n      notes_count: 0\n    }\n  }];\n}\n\n// Format notes for LLM\nconst notesText = notes.map((note, i) => {\n  return `[${i+1}] Título: ${note.title || 'Sem título'}\\nConteúdo: ${note.details || note.title || 'Sem conteúdo'}`;\n}).join('\\n\\n');\n\nreturn [{\n  json: {\n    ...inputData,\n    notes_text: notesText,\n    has_notes: true,\n    notes_count: notes.length\n  }\n}];"
+      },
+      "id": "trf-format-notes-001",
+      "name": "TRF_FormatNotesForLLM",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "HTTP-Referer",
+              "value": "https://n8n.redesupereco.com"
+            },
+            {
+              "name": "X-Title",
+              "value": "EMII-KRA"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"openai/gpt-4.1-mini\",\n  \"temperature\": 0.3,\n  \"max_tokens\": 300,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Você é um assistente que busca informações nas notas do usuário. Analise as notas disponíveis e responda a pergunta de forma direta e objetiva. Se encontrar a informação, forneça-a. Se não encontrar, diga que não encontrou.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": {{ JSON.stringify(\"Notas do usuário:\\n\" + ($json.notes_text || \"Nenhuma nota encontrada\") + \"\\n\\nPergunta:\\n\" + $json.text_raw + \"\\n\\nRetorne APENAS JSON:\\n{ \\\"found\\\": true|false, \\\"answer\\\": \\\"...\\\" }\") }}\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "kra-llm-001",
+      "name": "API_KRA_LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        304
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "6ergTsgANI55rcCV",
+          "name": "Infra_OpenRouter_HTTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse KRA LLM response\nconst llmResponse = $input.first().json;\nconst originalData = $('TRF_FormatNotesForLLM').first().json;\n\nlet match = false;\nlet answer = \"Não achei isso nas suas notas ainda. Quer que eu registre agora? (responda com 'anotar: ...')\";\nlet bestId = null;\nlet confidence = 0;\n\ntry {\n  const content = llmResponse.choices?.[0]?.message?.content || \"\";\n  const jsonMatch = content.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    const parsed = JSON.parse(jsonMatch[0]);\n    // Check for 'found' (from LLM prompt) or 'match' (legacy)\n    match = parsed.found === true || parsed.match === true;\n    if (match && parsed.answer) {\n      answer = parsed.answer;\n      bestId = parsed.best_id || null;\n      confidence = parsed.confidence || 0.8;\n    }\n  }\n} catch (e) {\n  // Keep defaults\n}\n\nreturn [{\n  json: {\n    ...originalData,\n    kra_match: match,\n    kra_answer: answer,\n    kra_best_id: bestId,\n    kra_confidence: confidence\n  }\n}];"
+      },
+      "id": "kra-parse-001",
+      "name": "TRF_ParseKRAResponse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1056,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "HTTP-Referer",
+              "value": "https://n8n.redesupereco.com"
+            },
+            {
+              "name": "X-Title",
+              "value": "EMII-EGA"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"openai/gpt-4.1-nano\",\n  \"temperature\": 0.2,\n  \"max_tokens\": 150,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Você é um revisor de tom. Verifique se a resposta está adequada para um executivo. Se estiver OK, retorne approved=true. Se precisar ajustar, retorne approved=false com a versão corrigida.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": {{ JSON.stringify(\"Resposta original:\\n\" + ($('TRF_ParseKRAResponse').first().json.kra_answer || \"\") + \"\\n\\nRetorne APENAS JSON:\\n{ \\\"approved\\\": true|false, \\\"final_text\\\": \\\"...\\\" }\") }}\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "ega-knowledge-001",
+      "name": "API_EGA_Knowledge",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1312,
+        304
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "6ergTsgANI55rcCV",
+          "name": "Infra_OpenRouter_HTTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse EGA response for knowledge (SAFE)\nconst llmResponse = $input.first().json;\nconst originalData = $('TRF_ParseKRAResponse').first().json;\nlet finalText = originalData.kra_answer; // fallback to original\n\ntry {\n  const content = llmResponse.choices?.[0]?.message?.content || \"\";\n  const jsonMatch = content.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    const parsed = JSON.parse(jsonMatch[0]);\n    // Check if approved and final_text exists\n    if (parsed.approved === true && parsed.final_text) {\n      finalText = parsed.final_text;\n    } else if (parsed.approved === false && parsed.final_text) {\n      finalText = parsed.final_text;\n    }\n  }\n} catch (e) {\n  // Safe: keep fallback\n  console.log('EGA parse error, using original:', e.message);\n}\n\nreturn [{\n  json: {\n    ...originalData,\n    final_response: finalText\n  }\n}];"
+      },
+      "id": "ega-knowledge-parse-001",
+      "name": "TRF_ParseEGAKnowledge",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.z-api.io/instances/3EF161BDC6931254B5992E8547AF841B/token/A3A3332D51363D4CBD61F10B/send-text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  \"phone\": $json.from_phone,\n  \"message\": $json.final_response\n}) }}",
+        "options": {}
+      },
+      "id": "zapi-knowledge-001",
+      "name": "API_ZAPI_KnowledgeReply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1808,
+        304
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2wrd7ilBY0oPeHcv",
+          "name": "Vini_Business_ZAPI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "tableId": "messages",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "provider",
+              "fieldValue": "zapi"
+            },
+            {
+              "fieldId": "provider_message_id",
+              "fieldValue": "={{ 'knowledge_' + ($json.kra_best_id || 'nomatch') + '_' + Date.now() }}"
+            },
+            {
+              "fieldId": "from_phone",
+              "fieldValue": "system"
+            },
+            {
+              "fieldId": "to_phone",
+              "fieldValue": "={{ $json.from_phone }}"
+            },
+            {
+              "fieldId": "direction",
+              "fieldValue": "out"
+            },
+            {
+              "fieldId": "type",
+              "fieldValue": "text"
+            },
+            {
+              "fieldId": "text_raw",
+              "fieldValue": "={{ $json.final_response }}"
+            },
+            {
+              "fieldId": "meta",
+              "fieldValue": "={{ JSON.stringify({ kind: 'knowledge', best_id: $json.kra_best_id, confidence: $json.kra_confidence }) }}"
+            }
+          ]
+        }
+      },
+      "id": "db-log-knowledge-001",
+      "name": "DB_LogKnowledgeOutbound",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2064,
+        304
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ { status: 'knowledge_response', match: $json.kra_match, best_id: $json.kra_best_id || null } }}",
+        "options": {}
+      },
+      "id": "rsp-knowledge-001",
+      "name": "OUT_KnowledgeResult",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2304,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "path": "a39fadf6-5b25-425d-8fd8-3a967e6cbf83",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -16,
+        544
+      ],
+      "id": "a5e8c1ea-c5fd-4bc3-9772-f1465b5059db",
+      "name": "Webhook",
+      "webhookId": "a39fadf6-5b25-425d-8fd8-3a967e6cbf83"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TRG_ExecuteWorkflow": {
+      "main": [
+        [
+          {
+            "node": "DB_FetchNotes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_FetchNotes": {
+      "main": [
+        [
+          {
+            "node": "TRF_FormatNotesForLLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_FormatNotesForLLM": {
+      "main": [
+        [
+          {
+            "node": "API_KRA_LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_KRA_LLM": {
+      "main": [
+        [
+          {
+            "node": "TRF_ParseKRAResponse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_ParseKRAResponse": {
+      "main": [
+        [
+          {
+            "node": "API_EGA_Knowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_EGA_Knowledge": {
+      "main": [
+        [
+          {
+            "node": "TRF_ParseEGAKnowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_ParseEGAKnowledge": {
+      "main": [
+        [
+          {
+            "node": "API_ZAPI_KnowledgeReply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_ZAPI_KnowledgeReply": {
+      "main": [
+        [
+          {
+            "node": "DB_LogKnowledgeOutbound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_LogKnowledgeOutbound": {
+      "main": [
+        [
+          {
+            "node": "OUT_KnowledgeResult",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "versionId": "9f5f45e8-fa43-4812-beb7-f020764e9a4c",
+  "meta": {
+    "instanceId": "e5b5be90f9458642dd4b6a612950f8d170694c02cfe60ae6b638142ad8aa31e6"
+  },
+  "id": "dyvwDY9kH3PkiVFM",
+  "tags": [
+    {
+      "updatedAt": "2026-02-28T20:43:57.398Z",
+      "createdAt": "2026-02-28T20:43:57.398Z",
+      "id": "L6OShbFn4DQIWFov",
+      "name": "v3 EMII - staging"
+    }
+  ]
+}

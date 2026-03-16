@@ -1,0 +1,804 @@
+{
+  "name": "[DEV] EMII_WF06_AG_CAPTURE",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -400,
+        304
+      ],
+      "id": "trigger",
+      "name": "TRG_FromOrchestrator",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "user_prefs",
+        "limit": 1,
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "owner_phone",
+              "condition": "eq",
+              "keyValue": "={{ $json.envelope.from_phone }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -208,
+        304
+      ],
+      "id": "db-fetch-prefs",
+      "name": "DB_FetchPrefs",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_PrepareContext - Prepare context with user prefs and LOCAL time\nlet envelope = $('TRG_FromOrchestrator').item.json.envelope;\nconst router = $('TRG_FromOrchestrator').item.json.router || {};\n// GUARDRAIL: envelope pode vir como string (JSON stringified) do Orchestrator\nif (typeof envelope === 'string') {\n  try {\n    envelope = JSON.parse(envelope);\n  } catch(e) {\n    envelope = { user_message: envelope, text_raw: envelope };\n  }\n}\nconst prefsResult = $('DB_FetchPrefs').all();\nlet lead_time_minutes = 15;\nlet timezone = 'America/Belem';\nif (prefsResult && prefsResult.length > 0) {\n  const prefs = prefsResult[0].json;\n  lead_time_minutes = prefs.lead_time_minutes || 15;\n  timezone = prefs.timezone || 'America/Belem';\n}\nconst now = new Date();\nconst localTime = now.toLocaleString('pt-BR', { \n  timeZone: timezone,\n  year: 'numeric', month: '2-digit', day: '2-digit',\n  hour: '2-digit', minute: '2-digit', second: '2-digit',\n  hour12: false\n});\nconst tzOffset = timezone === 'America/Belem' ? -3 : -3;\nconst userMessage = envelope.user_message || envelope.text_raw || '';\n// Montar o chatInput completo para o Agent\nconst chatInput = `Extraia os itens (lembretes, tarefas, notas) da mensagem do usuário.\nMENSAGEM: ${userMessage}\nDATA/HORA LOCAL: ${localTime}\nFUSO HORÁRIO: ${timezone} (GMT${tzOffset})\nConverta horários locais para UTC somando ${Math.abs(tzOffset)} horas.`;\nreturn [{\n  json: {\n    envelope: envelope,\n    router: router,\n    user_message: userMessage,\n    chatInput: chatInput,\n    prefs: {\n      lead_time_minutes: lead_time_minutes,\n      timezone: timezone,\n      tz_offset_hours: tzOffset,\n      lead_time_scope: (prefsResult && prefsResult.length > 0) ? (prefsResult[0].json.lead_time_scope || '') : ''\n    },\n    current_time_local: localTime,\n    current_time_utc: now.toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        304
+      ],
+      "id": "prepare-context",
+      "name": "TRF_PrepareContext"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5.2",
+          "mode": "list",
+          "cachedResultName": "gpt-5.2"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 800
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -80,
+        560
+      ],
+      "id": "llm-primary",
+      "name": "LLM_Primary",
+      "credentials": {
+        "openAiApi": {
+          "id": "OyRKCJH0YdG2smVs",
+          "name": "Infra_OpenAi_Agents_Call"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1-mini"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 800,
+          "temperature": 0.2
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        64,
+        608
+      ],
+      "id": "llm-fallback",
+      "name": "LLM_Fallback",
+      "credentials": {
+        "openAiApi": {
+          "id": "OyRKCJH0YdG2smVs",
+          "name": "Infra_OpenAi_Agents_Call"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5.1-codex",
+          "mode": "list",
+          "cachedResultName": "gpt-5.1-codex"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 500
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        352,
+        848
+      ],
+      "id": "llm-retry",
+      "name": "LLM_Retry",
+      "credentials": {
+        "openAiApi": {
+          "id": "OyRKCJH0YdG2smVs",
+          "name": "Infra_OpenAi_Agents_Call"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.envelope.from_phone }}",
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        240,
+        608
+      ],
+      "id": "memory",
+      "name": "Memory"
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\"type\": \"object\", \"properties\": {\"items\": {\"type\": \"array\", \"items\": {\"type\": \"object\", \"properties\": {\"type\": {\"type\": \"string\", \"description\": \"reminder, task, or note\"}, \"title\": {\"type\": \"string\", \"description\": \"Title of the item\"}, \"value\": {\"type\": [\"string\", \"null\"], \"description\": \"Content/value of the item or null\"}, \"event_datetime\": {\"type\": [\"string\", \"null\"], \"description\": \"ISO 8601 UTC datetime e.g. 2026-02-07T12:00:00Z or null if no date\"}, \"is_relative\": {\"type\": \"boolean\", \"description\": \"true if reminder uses relative time (daqui a X min), false if absolute time (\\u00e0s 14h)\"}, \"duration_minutes\": {\"type\": [\"number\", \"null\"], \"description\": \"Duration in minutes. Default 60 for meetings, 30 for calls, null for tasks/notes\"}, \"add_google_meet\": {\"type\": \"boolean\", \"description\": \"true if user wants a Google Meet link added to the event\"}, \"attendees\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}, \"description\": \"List of email addresses to invite to the event\"}, \"extra_reminders\": {\"type\": \"array\", \"items\": {\"type\": \"number\"}, \"description\": \"List of extra reminder times in minutes before the event (e.g. [10, 30, 60])\"}}, \"required\": [\"type\", \"title\"]}}, \"needs_clarification\": {\"type\": \"boolean\"}, \"clarification_question\": {\"type\": \"string\", \"description\": \"Question if needs_clarification is true\"}}, \"required\": [\"items\", \"needs_clarification\"]}",
+        "autoFix": true,
+        "customizeRetryPrompt": true,
+        "prompt": "Developer: Repair the JSON object or array of objects in {completion} to match the specified schema:\n\n- `type`: Allowed values are 'reminder', 'task', or 'note'.\n- `due_at`: Must be a valid ISO 8601 date string or null.\n- Include only fields present in the schema; remove all others.\n\nIf a required field is missing or invalid, set it to null. After repair, return only items that conform to the schema.\n\nError: {error}\nOriginal: {completion}\n\n## Output Format\nReturn the repaired item(s) as a JSON object or array. Example:\n[\n  {\n    \"type\": \"reminder\",\n    \"due_at\": \"2024-06-27T19:00:00Z\"\n  },\n  {\n    \"type\": \"note\",\n    \"due_at\": null\n  }\n]\n\nOmit any fields not defined in the schema."
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        448,
+        608
+      ],
+      "id": "parser",
+      "name": "Parser_Output"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.chatInput }}",
+        "hasOutputParser": true,
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "Você é EMII, assistente executivo pessoal de Márcio Aquino, CEO da rede de supermercados Super ECO no oeste do Pará. Atue como **Agente de Captura do EMII**. Sua função é extrair itens da mensagem do usuário: lembretes, tarefas ou notas.\n\n## Tipos de itens\n- reminder: lembrete ou compromisso com data/hora (quando o usuário NÃO usa a palavra \"tarefa\")\n- task: tarefa (quando o usuário usa a palavra \"tarefa\", \"task\", ou \"to-do\", MESMO que tenha data/hora)\n- note: anotação\n\n### REGRA IMPORTANTE DE CLASSIFICAÇÃO\n- Se o usuário usar explicitamente a palavra **\"tarefa\"**, **\"task\"** ou **\"to-do\"**, SEMPRE classifique como type: \"task\", mesmo que tenha data/hora.\n- Se o usuário usar \"lembrete\", \"me lembra\", \"me avisa\", \"reunião\", \"compromisso\", classifique como type: \"reminder\".\n- Se o usuário pedir algo com data/hora sem especificar o tipo, classifique como type: \"reminder\".\n\n## Compreensão temporal\n- Use sempre a data/hora local como referência.\n  - \"hoje\": data atual\n  - \"amanhã\": dia seguinte\n  - \"depois de amanhã\": dois dias à frente\n  - \"segunda\", \"terça\", etc.: próximo dia correspondente da semana\n  - \"daqui a X horas\": hora atual + X\n  - \"daqui a X minutos\": hora atual + X minutos\n  - \"de manhã\": 08:00\n  - \"de tarde\": 14:00\n  - \"de noite\": 20:00\n\n## Conversão para UTC\nUsuário está em GMT-3. Para UTC, some 3 horas ao horário local.\nExemplo: \"10:00\" local = \"13:00:00Z\" UTC.\n\n## CAMPO is_relative (OBRIGATÓRIO para reminders)\nDefina `is_relative: true` quando o lembrete usa expressão RELATIVA ao momento atual:\n- \"daqui a 5 minutos\", \"daqui a 1 hora\", \"em 30 minutos\", \"daqui a pouco\"\n- Nesses casos, a notificação deve chegar EXATAMENTE no horário solicitado (sem antecedência).\n\nDefina `is_relative: false` quando o lembrete usa horário ABSOLUTO ou compromisso agendado:\n- \"às 14h\", \"amanhã às 10h\", \"segunda às 9h\", \"reunião às 15h\"\n- Nesses casos, a notificação chegará com antecedência (lead_time configurável).\n\n## DURAÇÃO DO EVENTO (duration_minutes)\n- Reunião/meeting: 60 minutos (padrão)\n- Ligação/call: 30 minutos\n- Se o usuário especificar duração, use o valor informado (ex: \"reunião de 2 horas\" = 120)\n- Para lembretes simples sem duração: null\n\n## GOOGLE MEET (add_google_meet)\n- Defina `add_google_meet: true` quando o usuário pedir:\n  - \"com meet\", \"com link do meet\", \"com google meet\", \"reunião online\", \"videoconferência\", \"videochamada\"\n- Caso contrário: false\n\n## CONVIDADOS (attendees)\n- Extraia emails mencionados pelo usuário como convidados do evento\n- Exemplos: \"convida joao@email.com\", \"com fulano@empresa.com e ciclano@empresa.com\"\n- Se nenhum email for mencionado: array vazio []\n\n## NOTIFICAÇÕES EXTRAS (extra_reminders)\n- Se o usuário pedir notificações adicionais, extraia os minutos de antecedência\n- Exemplos: \n  - \"me avisa 10 minutos antes\" → [10]\n  - \"me avisa 30 min e 1 hora antes\" → [30, 60]\n  - \"com lembrete de 15 minutos\" → [15]\n- Se não pedir: array vazio []\n\n## REGRA CRÍTICA PARA MÚLTIPLOS ITENS\nQuando o usuário enviar múltiplos itens em uma única mensagem:\n1. Extraia TODOS os itens individualmente\n2. Se um item tem data/hora → type: \"reminder\"\n3. Se um item NÃO tem data/hora → type: \"task\" (NÃO peça clarificação)\n4. SEMPRE defina needs_clarification=false quando houver múltiplos itens\n5. NUNCA bloqueie a criação de itens completos por causa de itens sem horário\n\n## Solicitar esclarecimento (needs_clarification=true)\nPeça esclarecimento APENAS quando:\n- A mensagem inteira é vaga e não é possível extrair nenhum item\n- Expressão temporal ambígua (ex: \"naquele dia\")\nNÃO solicite esclarecimento para \"amanhã\", \"hoje\", \"segunda\", etc.\nNÃO solicite esclarecimento quando um item em uma lista não tem horário — classifique como task.\n\n\n## REGRA CRÍTICA: NOTAS NÃO SÃO TAREFAS\n- \"salve a senha do wifi: 123456\" → type: \"note\" (NÃO task!)\n- \"anota que o CNPJ é 12345678\" → type: \"note\" (NÃO task!)\n- \"guarda essa informação: ...\" → type: \"note\" (NÃO task!)\n- Notas são informações para GUARDAR, não ações para FAZER\n- Tarefas são ações que precisam ser EXECUTADAS\n- Se contém \"salve\", \"anota\", \"guarda\", \"registra\" + informação → SEMPRE note\n- Se contém \"comprar\", \"fazer\", \"terminar\", \"ligar\", \"enviar\" → task ou reminder\n\n## REGRA CRÍTICA: MÚLTIPLOS ITENS\nQuando a mensagem contém MÚLTIPLOS pedidos separados por \"e\", vírgula ou ponto:\n- \"terminar plano operacional e comprar carne\" → 2 itens separados\n- \"reunião às 10h e ligar pro médico às 14h\" → 2 itens separados\n- SEMPRE extraia CADA item individualmente no array items[]\n- NUNCA junte múltiplos itens em um só\n\n## Regras\n- Não invente datas não mencionadas pelo usuário.\n- Não crie itens não solicitados pelo usuário.\n- Retorne apenas o JSON de resposta, sem texto extra."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        208,
+        304
+      ],
+      "id": "agent-capture",
+      "name": "Agent_Capture"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_ProcessExtraction - Process extraction and prepare bulk create\nconst context = $('TRF_PrepareContext').item.json;\nconst agentOutput = $('Agent_Capture').item.json;\nlet items = [];\nlet needs_clarification = false;\nlet clarification_question = null;\ntry {\n  let extractedData = agentOutput;\n  if (agentOutput.output && typeof agentOutput.output === 'object') {\n    extractedData = agentOutput.output;\n  } else if (agentOutput.output && typeof agentOutput.output === 'string') {\n    const cleaned = agentOutput.output.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n    extractedData = JSON.parse(cleaned);\n  }\n  items = extractedData.items || [];\n  needs_clarification = extractedData.needs_clarification || false;\n  clarification_question = extractedData.clarification_question || null;\n} catch (e) {\n  needs_clarification = true;\n  clarification_question = 'Desculpe, não consegui entender. Pode reformular?';\n}\n// Detecção de conteúdo sensível\nconst SENSITIVE_PATTERNS = [\n  /senha/i, /password/i, /token/i, /api.?key/i,\n  /\\b\\d{3}\\.?\\d{3}\\.?\\d{3}-?\\d{2}\\b/,\n  /\\b\\d{2}\\.?\\d{3}\\.?\\d{3}\\/?\\d{4}-?\\d{2}\\b/,\n  /cnh/i, /nascimento/i, /data.?de.?nasc/i,\n  /\\bbanco\\b|\\bconta\\b|\\bag[eê]ncia\\b|\\bpix\\b/i, /cart[ãa]o/i,\n  /\\brg\\b/i, /\\bpis\\b/i\n];\nfunction isSensitive(text) {\n  if (!text) return false;\n  for (const pattern of SENSITIVE_PATTERNS) {\n    if (pattern.test(text)) return true;\n  }\n  return false;\n}\n// Truncar segundos\nfunction truncateSeconds(dt) {\n  if (!dt) return null;\n  return dt.replace(/(\\d{2}:\\d{2}):\\d{2}/, '$1:00');\n}\nconst default_lead_time = context.prefs.lead_time_minutes || 15;\nconst source_message_id = context.envelope.provider_message_id || null;\nconst owner_phone = context.envelope.from_phone;\nconst completeItems = [];\nconst incompleteItems = [];\nfor (const item of items) {\n  if (item.event_datetime) {\n    item.event_datetime = truncateSeconds(item.event_datetime);\n  }\n  if (item.type === 'note' || item.type === 'task') {\n    completeItems.push(item);\n  } else if (item.type === 'reminder' && item.event_datetime) {\n    completeItems.push(item);\n  } else if (item.type === 'reminder' && !item.event_datetime) {\n    item.type = 'task';\n    completeItems.push(item);\n  } else {\n    incompleteItems.push(item);\n  }\n}\nif (completeItems.length === 0 && needs_clarification) {\n  return [{\n    json: {\n      envelope: context.envelope,\n      needs_clarification: true,\n      clarification_question: clarification_question,\n      items_to_create: [],\n      skip_bulk_create: true\n    }\n  }];\n}\nconst items_to_create = completeItems.map(item => {\n  let notification_datetime = null;\n  let effective_lead_time = null;\n  \n  if (item.event_datetime && item.type === 'reminder') {\n    const isRelative = item.is_relative === true;\n    effective_lead_time = isRelative ? 0 : default_lead_time;\n    \n    const eventDate = new Date(item.event_datetime);\n    notification_datetime = new Date(eventDate.getTime() - (effective_lead_time * 60 * 1000)).toISOString();\n  }\n  \n  const combinedText = (item.title || '') + ' ' + (item.value || '');\n  const sensitive = isSensitive(combinedText);\n  \n  return {\n    type: item.type,\n    title: item.title,\n    value: item.value || null,\n    event_datetime: item.event_datetime || null,\n    notification_datetime: notification_datetime,\n    lead_time_minutes: effective_lead_time,\n    is_sensitive: sensitive,\n    priority: item.priority || 'medium',\n    tags: item.tags || [],\n    status: 'open',\n    owner_phone: owner_phone,\n    source_message_id: source_message_id,\n    // Google Calendar enhancement fields\n    duration_minutes: item.duration_minutes || null,\n    add_google_meet: item.add_google_meet || false,\n    attendees: item.attendees || [],\n    extra_reminders: item.extra_reminders || []\n  };\n});\nconst pendingClarification = (incompleteItems.length > 0 && needs_clarification) \n  ? clarification_question \n  : null;\nreturn [{\n  json: {\n    envelope: context.envelope,\n    needs_clarification: false,\n    clarification_question: pendingClarification,\n    items_to_create: items_to_create,\n    skip_bulk_create: items_to_create.length === 0\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        608,
+        304
+      ],
+      "id": "process-extraction",
+      "name": "TRF_ProcessExtraction"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "if_skip_bulk_create",
+              "leftValue": "={{ $json.skip_bulk_create }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        864,
+        304
+      ],
+      "id": "if-clarification",
+      "name": "IF_SkipBulkCreate"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_ReturnClarification - Return clarification question\nconst data = $('TRF_ProcessExtraction').item.json;\n\nlet responseText = data.clarification_question || 'Não encontrei itens para criar.';\n\nreturn [{\n  json: {\n    envelope: data.envelope,\n    agent_response: {\n      text: responseText,\n      agent: 'CAPTURE',\n      created_count: 0,\n      needs_clarification: true\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        400
+      ],
+      "id": "return-clarification",
+      "name": "TRF_ReturnClarification"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare ALL items for database insertion\nconst allInputs = $input.all();\nreturn allInputs.map(inputItem => {\n  const data = inputItem.json;\n  const item = data.item || {};\n  const envelope = data.envelope || {};\n  \n  return {\n    json: {\n      owner_phone: item.owner_phone || envelope.from_phone,\n      type: item.type || 'note',\n      title: item.title || 'Sem título',\n      value: item.value || null,\n      status: 'open',\n      priority: item.priority || 'medium',\n      event_datetime: item.event_datetime || null,\n      notification_datetime: item.notification_datetime || null,\n      lead_time_minutes: item.lead_time_minutes || null,\n      is_sensitive: item.is_sensitive || false,\n      source_message_id: item.source_message_id || null,\n      tags: item.tags || [],\n      // New fields for Google Calendar enhancements\n      duration_minutes: item.duration_minutes || null,\n      add_google_meet: item.add_google_meet || false,\n      attendees: item.attendees || [],\n      extra_reminders: item.extra_reminders || [],\n      envelope: envelope\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1408,
+        192
+      ],
+      "id": "prepare-item",
+      "name": "TRF_PrepareItem"
+    },
+    {
+      "parameters": {
+        "jsCode": "// DB_InsertItem V6 - insert one by one using secure env vars\nconst allInputs = $input.all();\nconst supabaseUrl = 'https://chtkfksjqcvlxpgyzlsf.supabase.co';\nconst supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNodGtma3NqcWN2bHhwZ3l6bHNmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjMwODU1NywiZXhwIjoyMDg3ODg0NTU3fQ.DM9wL7MlXRBuM_IYDk3pQ_q-WE7DYuwpqTTywg5A05U';\n\nif (!supabaseUrl || !supabaseKey) {\n  return allInputs.map((inputItem) => ({\n    json: {\n      ...inputItem.json,\n      id: null,\n      _db_insert_error: 'Missing SUPABASE_URL or SUPABASE_KEY environment variables'\n    }\n  }));\n}\n\nconst headers = {\n  apikey: supabaseKey,\n  Authorization: 'Bearer ' + supabaseKey,\n  'Content-Type': 'application/json',\n  Prefer: 'return=representation'\n};\n\nconst results = [];\n\nfor (const inputItem of allInputs) {\n  const item = inputItem.json;\n  const row = {\n    owner_phone: item.owner_phone,\n    type: item.type,\n    title: item.title,\n    value: item.value || null,\n    event_datetime: item.event_datetime || null,\n    notification_datetime: item.notification_datetime || null,\n    lead_time_minutes: item.lead_time_minutes || null,\n    is_sensitive: item.is_sensitive || false,\n    source_message_id: item.source_message_id || null,\n    priority: item.priority || 'medium',\n    status: 'open'\n  };\n\n  try {\n    const result = await this.helpers.httpRequest({\n      method: 'POST',\n      url: supabaseUrl + '/rest/v1/items',\n      headers,\n      body: row,\n      json: true\n    });\n\n    const inserted = Array.isArray(result) ? result[0] : result;\n    results.push({\n      json: {\n        ...item,\n        id: inserted.id,\n        created_at: inserted.created_at\n      }\n    });\n  } catch (e) {\n    results.push({\n      json: {\n        ...item,\n        id: null,\n        _db_insert_error: e.message\n      }\n    });\n  }\n}\n\nreturn results;"
+      },
+      "id": "db-insert",
+      "name": "DB_InsertItem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1712,
+        192
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_BuildSummary V4 - Fixed: use DB_InsertItem.all() for multi-item support\n// Get ALL inserted items from DB_InsertItem (not $input which only has last node's output)\nlet preparedItems = [];\ntry {\n  const dbItems = $('DB_InsertItem').all();\n  preparedItems = dbItems.map(i => i.json);\n} catch(e) {\n  // Fallback to input if DB_InsertItem reference fails\n  preparedItems = $input.all().map(i => i.json);\n}\n\nconst firstExtract = $('TRF_ExtractItems').first().json || {};\nconst envelope = firstExtract.envelope || preparedItems[0]?.envelope || {};\nconst pendingClarification = $('TRF_ProcessExtraction').first().json?.clarification_question || null;\n\n// Check if user has master password\nlet hasMasterPassword = false;\ntry {\n  const prefsResult = $('DB_FetchPrefs').all();\n  if (prefsResult && prefsResult.length > 0) {\n    const scope = prefsResult[0].json.lead_time_scope || '';\n    hasMasterPassword = scope.startsWith('master_pwd:');\n  }\n} catch(e) {}\n\nfunction formatDateTime(isoStr) {\n  if (!isoStr) return 'sem data';\n  const d = new Date(isoStr);\n  return d.toLocaleString('pt-BR', {\n    timeZone: 'America/Belem',\n    day: '2-digit', month: '2-digit', year: 'numeric',\n    hour: '2-digit', minute: '2-digit', hour12: false\n  });\n}\n\nconst SENSITIVE_WORDS = ['senha', 'password', 'pin', 'código', 'codigo', 'segredo', 'secret', 'chave', 'token', 'acesso', 'banco', 'conta', 'agência', 'agencia', 'pix', 'cartão', 'cartao', 'cpf', 'cnpj', 'rg'];\nfunction isSensitive(title, value) {\n  const combined = ((title || '') + ' ' + (value || '')).toLowerCase();\n  return SENSITIVE_WORDS.some(kw => combined.includes(kw));\n}\n\nlet hasSensitiveItem = false;\nlet summary = '';\nconst itemCount = preparedItems.length;\n\nif (itemCount === 0) {\n  summary = 'Não consegui identificar nenhum item para salvar. Pode reformular?';\n} else if (itemCount === 1) {\n  const item = preparedItems[0];\n  const type = item.type;\n  \n  if (isSensitive(item.title, item.value)) hasSensitiveItem = true;\n  \n  if (type === 'reminder' || type === 'event') {\n    const dueAt = formatDateTime(item.event_datetime);\n    summary = '✅ ' + (type === 'reminder' ? 'Lembrete' : 'Evento') + ' criado!\\n📝 ' + item.title + '\\n⏰ ' + dueAt;\n    if (item.google_meet_link) {\n      summary += '\\n📹 Meet: ' + item.google_meet_link;\n    }\n    if (item.attendees && item.attendees.length > 0) {\n      summary += '\\n👥 Convidados: ' + item.attendees.join(', ');\n    }\n    if (item.extra_reminders && item.extra_reminders.length > 0) {\n      const reminderTexts = item.extra_reminders.map(m => m >= 60 ? (m/60) + 'h antes' : m + 'min antes');\n      summary += '\\n🔔 Alertas: ' + reminderTexts.join(', ');\n    }\n    summary += '\\n📅 Sincronizado com Google Calendar';\n  } else if (type === 'task') {\n    summary = '✅ Tarefa criada!\\n📋 ' + item.title;\n    if (item.event_datetime) {\n      summary += '\\n📅 Prazo: ' + formatDateTime(item.event_datetime);\n    }\n    summary += '\\n📋 Sincronizado com Google Tasks';\n  } else if (type === 'note') {\n    summary = '✅ Nota salva!\\n📝 ' + item.title;\n  }\n} else {\n  summary = '✅ ' + itemCount + ' itens criados:\\n';\n  preparedItems.forEach((item, idx) => {\n    if (isSensitive(item.title, item.value)) hasSensitiveItem = true;\n    const emoji = (item.type === 'reminder' || item.type === 'event') ? '⏰' : item.type === 'task' ? '📋' : '📝';\n    let line = emoji + ' ' + item.title;\n    if (item.event_datetime) {\n      line += ' — ' + formatDateTime(item.event_datetime);\n    }\n    if (item.google_meet_link) {\n      line += ' 📹';\n    }\n    if (item.type === 'reminder' || item.type === 'event') line += ' [Calendar]';\n    else if (item.type === 'task') line += ' [Tasks]';\n    summary += line + '\\n';\n  });\n}\n\nif (hasSensitiveItem && !hasMasterPassword) {\n  summary += '\\n\\n🔐 Essa informação é sensível! Para protegê-la, cadastre uma contrasenha: \"minha contrasenha é [sua senha]\"';\n}\nif (pendingClarification) {\n  summary += '\\n⚠️ ' + pendingClarification;\n}\n\nreturn {\n  json: {\n    summary: summary,\n    envelope: envelope,\n    items_count: itemCount\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3472,
+        192
+      ],
+      "id": "build-summary",
+      "name": "TRF_BuildSummary"
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch"
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        3712,
+        192
+      ],
+      "id": "merge-outputs",
+      "name": "Merge_Outputs"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_ExtractItems - Extract items_to_create array for loop\nconst input = $json;\nconst items = input.items_to_create || [];\nconst envelope = input.envelope;\n\n// If no items to create, return empty to skip the loop\nif (items.length === 0) {\n  return [];\n}\n\n// Return each item as a separate output with owner_phone from envelope\nreturn items.map(item => ({\n  json: {\n    item: {\n      ...item,\n      owner_phone: item.owner_phone || envelope.from_phone\n    },\n    envelope: envelope\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        192
+      ],
+      "id": "trf-extract-items",
+      "name": "TRF_ExtractItems"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "if_needs_google_sync",
+              "leftValue": "={{ $json.type }}",
+              "rightValue": "note",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1968,
+        192
+      ],
+      "id": "if-needs-google-sync",
+      "name": "IF_NeedsGoogleSync"
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.item.json;\nconst itemType = item.type;\nlet syncTarget = 'none';\nif (itemType === 'reminder' && item.event_datetime) {\n  syncTarget = 'calendar';\n} else if (itemType === 'task') {\n  syncTarget = 'tasks';\n}\nreturn [{\n  json: {\n    ...item,\n    _sync_target: syncTarget\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2224,
+        96
+      ],
+      "id": "sync-google-router",
+      "name": "TRF_SyncRouter"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "if_is_calendar",
+              "leftValue": "={{ $json.type }}",
+              "rightValue": "reminder",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2464,
+        96
+      ],
+      "id": "if-is-calendar",
+      "name": "IF_IsCalendar"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://www.googleapis.com/calendar/v3/calendars/marcio.ma@redesupereco.com/events",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "conferenceDataVersion",
+              "value": "={{ $json.add_google_meet ? '1' : '0' }}"
+            },
+            {
+              "name": "sendUpdates",
+              "value": "={{ $json.attendees && $json.attendees.length > 0 ? 'all' : 'none' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n(function() {\n  const item = $json;\n  const startTime = item.event_datetime;\n  const duration = item.duration_minutes || 60;\n  const endMs = new Date(startTime).getTime() + duration * 60 * 1000;\n  const endTime = new Date(endMs).toISOString();\n  \n  const event = {\n    summary: item.title,\n    description: item.value || '',\n    start: { dateTime: startTime, timeZone: 'America/Belem' },\n    end: { dateTime: endTime, timeZone: 'America/Belem' }\n  };\n  \n  // Google Meet\n  if (item.add_google_meet) {\n    event.conferenceData = {\n      createRequest: {\n        requestId: (item.id || Date.now()).toString(),\n        conferenceSolutionKey: { type: 'hangoutsMeet' }\n      }\n    };\n  }\n  \n  // Attendees (emails)\n  if (item.attendees && item.attendees.length > 0) {\n    event.attendees = item.attendees.map(email => ({ email: email.trim() }));\n  }\n  \n  // Custom reminders\n  if (item.extra_reminders && item.extra_reminders.length > 0) {\n    event.reminders = {\n      useDefault: false,\n      overrides: item.extra_reminders.map(r => ({\n        method: 'popup',\n        minutes: r\n      }))\n    };\n  }\n  \n  return event;\n})()\n}}",
+        "options": {}
+      },
+      "id": "gcal-create-sync",
+      "name": "GCal_SyncCreate",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2720,
+        -64
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "EjpsnzbHBHBfm42E",
+          "name": "Infra_Calendar"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "task": "MDY5NjAyODM5OTIyNzk0NjM4MzM6MDow",
+        "title": "={{ $json.title }}",
+        "additionalFields": {
+          "dueDate": "={{ $json.event_datetime ? $json.event_datetime : undefined }}",
+          "notes": "={{ $json.value || '' }}"
+        }
+      },
+      "type": "n8n-nodes-base.googleTasks",
+      "typeVersion": 1,
+      "position": [
+        2720,
+        256
+      ],
+      "id": "gtasks-create-sync",
+      "name": "GTasks_SyncCreate",
+      "credentials": {
+        "googleTasksOAuth2Api": {
+          "id": "mw82h3M70MIvp8It",
+          "name": "Infra_Tasks"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extrai o Google ID retornado e prepara para salvar no DB\nconst googleResponse = $input.item.json;\nconst originalItem = $(\"IF_NeedsGoogleSync\").item.json;\nconst itemType = originalItem.type;\n\nlet calendarEventId = null;\nlet tasksTaskId = null;\nlet meetLink = null;\n\nif (itemType === 'reminder') {\n  calendarEventId = googleResponse.id || null;\n  // Extract Google Meet link if created\n  if (googleResponse.conferenceData && googleResponse.conferenceData.entryPoints) {\n    const videoEntry = googleResponse.conferenceData.entryPoints.find(e => e.entryPointType === 'video');\n    if (videoEntry) {\n      meetLink = videoEntry.uri;\n    }\n  } else if (googleResponse.hangoutLink) {\n    meetLink = googleResponse.hangoutLink;\n  }\n} else if (itemType === 'task') {\n  tasksTaskId = googleResponse.id || null;\n}\n\nreturn [{\n  json: {\n    ...originalItem,\n    google_calendar_event_id: calendarEventId,\n    google_tasks_task_id: tasksTaskId,\n    google_meet_link: meetLink,\n    _item_id_to_update: originalItem.id\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2976,
+        96
+      ],
+      "id": "extract-google-id",
+      "name": "TRF_ExtractGoogleId",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// DB_SaveGoogleId V6 - persist Google IDs using secure env vars\nconst item = $input.item.json;\nconst supabaseUrl = 'https://chtkfksjqcvlxpgyzlsf.supabase.co';\nconst supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNodGtma3NqcWN2bHhwZ3l6bHNmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjMwODU1NywiZXhwIjoyMDg3ODg0NTU3fQ.DM9wL7MlXRBuM_IYDk3pQ_q-WE7DYuwpqTTywg5A05U';\n\nif (!supabaseUrl || !supabaseKey) {\n  return [{ json: { ...item, _google_id_saved: false, _save_error: 'Missing SUPABASE_URL or SUPABASE_KEY environment variables' } }];\n}\n\nconst itemId = item._item_id_to_update;\nif (!itemId) {\n  return [{ json: { ...item, _save_error: 'No item ID to update' } }];\n}\n\nconst updateBody = {};\nif (item.google_calendar_event_id) {\n  updateBody.google_calendar_event_id = item.google_calendar_event_id;\n}\nif (item.google_tasks_task_id) {\n  updateBody.google_tasks_task_id = item.google_tasks_task_id;\n}\nif (Object.keys(updateBody).length === 0) {\n  return [{ json: item }];\n}\n\ntry {\n  await this.helpers.httpRequest({\n    method: 'PATCH',\n    url: supabaseUrl + '/rest/v1/items?id=eq.' + itemId,\n    headers: {\n      apikey: supabaseKey,\n      Authorization: 'Bearer ' + supabaseKey,\n      'Content-Type': 'application/json',\n      Prefer: 'return=representation'\n    },\n    body: updateBody,\n    json: true\n  });\n  return [{ json: { ...item, _google_id_saved: true } }];\n} catch (e) {\n  return [{ json: { ...item, _google_id_saved: false, _save_error: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3216,
+        96
+      ],
+      "id": "db-save-google-id",
+      "name": "DB_SaveGoogleId",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "path": "760a0c35-1ed0-48fc-aa79-a750a37e54b0",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "0ada40bf-c879-472c-9727-618fad27d2fe",
+      "name": "Webhook",
+      "webhookId": "760a0c35-1ed0-48fc-aa79-a750a37e54b0"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TRG_FromOrchestrator": {
+      "main": [
+        [
+          {
+            "node": "DB_FetchPrefs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_FetchPrefs": {
+      "main": [
+        [
+          {
+            "node": "TRF_PrepareContext",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_PrepareContext": {
+      "main": [
+        [
+          {
+            "node": "Agent_Capture",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent_Capture": {
+      "main": [
+        [
+          {
+            "node": "TRF_ProcessExtraction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_ProcessExtraction": {
+      "main": [
+        [
+          {
+            "node": "IF_SkipBulkCreate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_SkipBulkCreate": {
+      "main": [
+        [
+          {
+            "node": "TRF_ReturnClarification",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "TRF_ExtractItems",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_ReturnClarification": {
+      "main": [
+        [
+          {
+            "node": "Merge_Outputs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_PrepareItem": {
+      "main": [
+        [
+          {
+            "node": "DB_InsertItem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_InsertItem": {
+      "main": [
+        [
+          {
+            "node": "IF_NeedsGoogleSync",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_BuildSummary": {
+      "main": [
+        [
+          {
+            "node": "Merge_Outputs",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "LLM_Primary": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agent_Capture",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM_Fallback": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agent_Capture",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Agent_Capture",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parser_Output": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Agent_Capture",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM_Retry": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Parser_Output",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_ExtractItems": {
+      "main": [
+        [
+          {
+            "node": "TRF_PrepareItem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_NeedsGoogleSync": {
+      "main": [
+        [
+          {
+            "node": "IF_IsCalendar",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "TRF_BuildSummary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_SyncRouter": {
+      "main": [
+        [
+          {
+            "node": "IF_IsCalendar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_IsCalendar": {
+      "main": [
+        [
+          {
+            "node": "GCal_SyncCreate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "GTasks_SyncCreate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GCal_SyncCreate": {
+      "main": [
+        [
+          {
+            "node": "TRF_ExtractGoogleId",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GTasks_SyncCreate": {
+      "main": [
+        [
+          {
+            "node": "TRF_ExtractGoogleId",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_ExtractGoogleId": {
+      "main": [
+        [
+          {
+            "node": "DB_SaveGoogleId",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_SaveGoogleId": {
+      "main": [
+        [
+          {
+            "node": "TRF_BuildSummary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "versionId": "eb325db9-4bc5-4737-ae21-207031cfac8b",
+  "meta": {
+    "instanceId": "e5b5be90f9458642dd4b6a612950f8d170694c02cfe60ae6b638142ad8aa31e6"
+  },
+  "id": "Jk7Gkrd8tpclxOYx",
+  "tags": [
+    {
+      "updatedAt": "2026-02-28T20:43:57.398Z",
+      "createdAt": "2026-02-28T20:43:57.398Z",
+      "id": "L6OShbFn4DQIWFov",
+      "name": "v3 EMII - staging"
+    }
+  ]
+}

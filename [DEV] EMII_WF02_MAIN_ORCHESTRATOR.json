@@ -1,0 +1,509 @@
+{
+  "name": "[DEV] EMII_WF02_MAIN_ORCHESTRATOR",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -464,
+        288
+      ],
+      "id": "trigger",
+      "name": "TRG_FromGate",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5.2",
+          "mode": "list",
+          "cachedResultName": "gpt-5.2"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 500,
+          "temperature": 0.1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -320,
+        528
+      ],
+      "id": "llm-primary",
+      "name": "LLM_Primary",
+      "credentials": {
+        "openAiApi": {
+          "id": "OyRKCJH0YdG2smVs",
+          "name": "Infra_OpenAi_Agents_Call"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1-mini"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 500,
+          "temperature": 0.1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -160,
+        528
+      ],
+      "id": "llm-fallback",
+      "name": "LLM_Fallback",
+      "credentials": {
+        "openAiApi": {
+          "id": "OyRKCJH0YdG2smVs",
+          "name": "Infra_OpenAi_Agents_Call"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5.1-codex",
+          "mode": "list",
+          "cachedResultName": "gpt-5.1-codex"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 300
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        224,
+        720
+      ],
+      "id": "llm-retry",
+      "name": "LLM_Retry",
+      "credentials": {
+        "openAiApi": {
+          "id": "OyRKCJH0YdG2smVs",
+          "name": "Infra_OpenAi_Agents_Call"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.envelope.from_phone }}",
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        16,
+        512
+      ],
+      "id": "memory",
+      "name": "Memory"
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"route\": {\n      \"type\": \"string\",\n      \"enum\": [\n        \"conversational\",\n        \"query\",\n        \"capture\",\n        \"config\"\n      ]\n    },\n    \"confidence\": {\n      \"type\": \"number\"\n    },\n    \"extracted_items\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\"\n      }\n    }\n  },\n  \"required\": [\n    \"route\",\n    \"confidence\"\n  ],\n  \"additionalProperties\": false\n}",
+        "autoFix": true,
+        "customizeRetryPrompt": true,
+        "prompt": "You are a strict JSON repair engine.\n\nField Constraints:\n- The `route` field must be exactly one of: \"conversational\", \"query\", \"capture\", or \"config\". Do not invent new values. If the value is invalid or custom, correct it, or flag it as an error.\n- The `extracted_items` field is optional. If missing, set to an empty array: [].\n- Output must include only `route` and `extracted_items`. Do not add extra fields.\n\nError Handling:\n- Flag errors only for: incorrect `route` value, missing or unknown fields, malformed content or JSON, or missing/ambiguous required fields.\n- If JSON is invalid or has unrecognized keys or missing/ambiguous fields, identify and correct the issues explicitly.\n\nInputs:\n- Error to fix: `{error}`\n- Schema/instructions: `{instructions}`\n- Original completion: `{completion}`\n\nOutput Format:\nReturn only a JSON object matching:\n{\n  \"route\": \"conversational\" | \"query\" | \"capture\" | \"config\",\n  \"extracted_items\": [] // Optional; if missing, set to []\n}\nIf any errors, return one object with an `errors` field listing the problems."
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        144,
+        512
+      ],
+      "id": "parser",
+      "name": "Parser_Route"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Classifique a intenção do usuário.\nMENSAGEM: {{ $json.envelope.user_message || $json.envelope.text_raw }}",
+        "hasOutputParser": true,
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "Você é EMII, a assistente executiva pessoal de Márcio Aquino, CEO da rede de supermercados Super ECO no oeste do Pará, atuando como **Router Agent do EMII**. Sua ÚNICA função é classificar a intenção do usuário em EXATAMENTE UMA das rotas válidas.\n\n## ROTAS VÁLIDAS\n\n### capture (PRIORIDADE ALTA)\nUse para intenções de CRIAÇÃO, como:\n- \"me lembra de...\", \"lembra de...\", \"lembrar de...\"\n- \"anota que...\", \"anota isso...\", \"salva uma nota...\"\n- \"preciso fazer...\", \"tenho que...\", \"não posso esquecer...\"\n- \"agenda...\", \"marca...\", \"cria um lembrete...\"\n- Menção a horário + ação futura (ex: \"amanhã ligar pro médico\")\n- Expressão temporal + ação (ex: \"amanhã ligar pro médico\")\n\n### query\nUse para CONSULTAS de informações já existentes:\n- \"o que tenho hoje?\", \"quais são meus compromissos?\"\n- \"me mostra minhas tarefas\", \"lista meus lembretes\"\n- \"tenho algo marcado para amanhã?\"\n- \"o que tem na agenda?\", \"agenda de hoje\"\n- \"qual a senha do Wi-Fi?\", \"qual a senha de casa?\"\n- \"quais notas eu tenho?\", \"o que eu salvei?\"\n\n### conversational\nUse somente para interações SOCIAIS, sem intenção de ação:\n- Saudações: \"oi\", \"bom dia\", \"olá\", \"boa tarde\", \"boa noite\"\n- Agradecimentos: \"obrigado\", \"valeu\"\n- Despedidas: \"tchau\", \"até mais\"\n- Bate-papo: \"tudo bem?\", \"como você está?\"\n- Perguntas pessoais sobre o Márcio ou sobre a EMII: \"qual meu nome?\", \"quem sou eu?\", \"qual sua função?\", \"o que você faz?\", \"qual minha empresa?\"\n- Perguntas de conhecimento geral ou curiosidades\n- Continuações de conversa social: \"e meu nome?\", \"e você?\", \"e a empresa?\"\n- REGRA: Se a mensagem começa com \"E \" seguido de pergunta pessoal/social, é CONTINUAÇÃO de conversa → conversational\n\n### config\nUse para configurações do sistema E gerenciamento de itens existentes:\n- \"muda meu fuso horário\", \"configura...\", \"altera minha preferência...\"\n- \"cancela o lembrete\", \"remove a tarefa\", \"apaga a nota\"\n- \"cadastrar contrasenha\", \"definir contrasenha\", \"minha contrasenha é...\", \"alterar contrasenha\"\n- \"me avisa X minutos antes\", \"muda o tempo de aviso\"\n- CANCELAMENTO: \"cancela a reunião\", \"remove o lembrete de X\", \"apaga a nota do CNPJ\"\n- CONCLUSÃO: \"já fiz X\", \"já comprei X\", \"concluí a tarefa\", \"feito o lembrete de X\"\n- EXCLUSÃO: \"apaga X\", \"exclui X\", \"deleta a nota de X\"\n- ALTERAÇÃO: \"muda a reunião para 15h\", \"altera o horário\", \"remarca para amanhã\", \"muda o título\", \"altera a duração para 2h\"\n\n## REGRAS PRINCIPAIS\n0. Perguntas pessoais (\"qual meu nome?\", \"quem sou eu?\", \"qual minha empresa?\", \"e meu nome?\") são SEMPRE **conversational** — NUNCA query\n0b. Frases de CONCLUSÃO de tarefa (\"já fiz X\", \"já comprei X\", \"concluí X\", \"feito X\") são SEMPRE **config** — NUNCA conversational\n0c. Frases de CANCELAMENTO (\"cancela X\", \"remove X\", \"apaga X\") são SEMPRE **config** — NUNCA conversational\n1. Mencionar \"lembrar\", \"lembra\", \"lembrete\": classifique sempre como **capture**\n2. Mencionar horário + ação futura: classifique sempre como **capture**\n3. Mencionar \"anota\", \"nota\", \"salva\" + conteúdo: classifique sempre como **capture**\n4. Em dúvida entre query e capture, prefira **capture**\n5. conversational: apenas para saudações ou bate-papo, sem pedido de ação\n6. Não classifique um pedido de criação como \"conversational\"\n7. Não classifique pedido de consulta como \"capture\"\n8. \"contrasenha\", \"senha mestra\", \"definir contrasenha\": SEMPRE **config**\n9. Perguntas sobre senhas/notas salvas (\"qual a senha?\", \"qual a nota?\"): SEMPRE **query**\n\n## COMPREENSÃO TEMPORAL\n- Expressões como \"hoje\", \"amanhã\", \"segunda\", \"semana que vem\" são válidas e devem ser mantidas.\n- Não peça esclarecimento para expressões temporais comuns.\n- Considere ambíguas apenas expressões realmente vagas (ex: \"naquele dia\").\n\n## EXEMPLOS\n- \"já comprei o papel A4\" → config\n- \"já fiz a reunião\" → config\n- \"concluí a tarefa\" → config\n- \"cancela a reunião com o contador\" → config\n- \"apaga a nota do CNPJ\" → config\n- \"me lembra de ligar pro médico às 10h\" → capture\n- \"lembra de pagar a conta amanhã\" → capture\n- \"16:10 ligar pro Tio Chico\" → capture\n- \"anota que preciso comprar leite\" → capture\n- \"salva a senha do Wi-Fi: abc123\" → capture\n- \"oi, tudo bem?\" → conversational\n- \"bom dia Emii!\" → conversational\n- \"qual meu nome?\" → conversational\n- \"e meu nome, qual é?\" → conversational\n- \"o que tenho hoje?\" → query\n- \"tem algo na agenda?\" → query\n- \"qual a senha do Wi-Fi?\" → query\n- \"quais notas eu tenho?\" → query\n- \"cancela o lembrete de reunião\" → config\n- \"cadastrar contrasenha: 1234\" → config\n- \"definir contrasenha abc\" → config\n- \"me avisa 30 minutos antes\" → config\n- \"muda a reunião para 15h\" → config\n- \"remarca o compromisso para amanhã\" → config\n- \"altera a duração da reunião para 2h\" → config\n- \"adicione convidados na reunião\" → config\n- \"adiciona o email joao@email.com na reunião\" → config\n- \"remove o convidado maria@email.com\" → config\n- \"essa tarefa foi concluída\" → config\n- \"pode marcar como feito\" → config\n- \"marca a tarefa como concluída\" → config\n\n## CONTRATO DE SAÍDA (OBRIGATÓRIO)\n{\n  \"route\": \"conversational|query|capture|config\",\n  \"confidence\": 0.95,\n  \"extracted_items\": [{\"type\": \"date\", \"value\": \"2024-01-15\"}]\n}\n\n⚠️ NÃO inclua texto fora do JSON. Não adicione blocos de código markdown ao redor do JSON.\n\n## Output Format\n- Sempre retorne um objeto JSON com os seguintes campos, nesta ordem:\n  - \"route\": string, um dos: \"conversational\", \"query\", \"capture\" ou \"config\" (exatamente um)\n  - \"confidence\": número float entre 0 e 1 (alta precisão, ex: 0.95)\n  - \"extracted_items\": array de entidades extraídas ou informações (pode ficar vazio: [])\n- Para pedidos ambíguos ou inválidos (exceto expressões temporais comuns), retorne a melhor rota estimada e confiança; mantenha \"extracted_items\" vazio se nada for extraído.\n- A ordem dos campos deve ser: \"route\", \"confidence\", \"extracted_items\"\n- Não inclua texto extra nem formatação fora do objeto JSON."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        -144,
+        288
+      ],
+      "id": "agent-router",
+      "name": "Agent_Router"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_MapTargetWF - Map route to target workflow ID\nconst envelope = $('TRG_FromGate').item.json.envelope;\nconst agentOutput = $('Agent_Router').item.json || {};\n\n// Parse router response - handle nested output object\nlet route = 'conversational';\nlet confidence = 0.5;\nlet hints = {};\n\ntry {\n  // Check if output is nested in .output property (common with langchain agents)\n  const routerData = agentOutput.output || agentOutput || {};\n  \n  if (routerData && typeof routerData === 'object' && routerData.route) {\n    route = routerData.route.toLowerCase();\n    confidence = routerData.confidence || 0.5;\n    hints = routerData.hints || {};\n  } else if (typeof routerData === 'string') {\n    // Try to parse as JSON string - remove markdown code blocks\n    const cleaned = routerData.replace(/\\x60\\x60\\x60json\\n?/g, '').replace(/\\x60\\x60\\x60\\n?/g, '').trim();\n    const parsed = JSON.parse(cleaned);\n    route = (parsed.route || 'conversational').toLowerCase();\n    confidence = parsed.confidence || 0.5;\n    hints = parsed.hints || {};\n  }\n} catch (e) {\n  route = 'conversational';\n  confidence = 0.3;\n}\n\n// Normalize route (UPDATED: added calendar and tasks)\nconst validRoutes = ['calendar', 'tasks', 'conversational', 'query', 'config', 'capture'];\nif (validRoutes.indexOf(route) === -1) {\n  route = 'conversational';\n}\n\n// Map route to workflow ID (UPDATED: added WF07 and WF08)\nconst routeMap = {\n  calendar: 'wGuyX1RKJyU4BTqE',\n  tasks: 'WQzoN1MwzHmv9TQr',\n  conversational: '3ZzMCwFZcYM6pE1u',\n  query: 'ULmkALrmYbBk7QqH',\n  config: 'nz61poQpkCGoYX54',\n  capture: 'zNOCKOmBHL5aocsG'\n};\n\nconst target_wf_id = routeMap[route];\nconst start_time = Date.now();\n\nreturn [{\n  json: {\n    envelope: envelope,\n    router: {\n      route: route,\n      confidence: confidence,\n      hints: hints\n    },\n    target_wf_id: target_wf_id,\n    _meta: {\n      start_time: start_time,\n      trace_id: envelope.trace_id\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        288
+      ],
+      "id": "map-target",
+      "name": "TRF_MapTargetWF"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.target_wf_id }}"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        736,
+        288
+      ],
+      "id": "exec-subagent",
+      "name": "EXEC_SubAgent",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "cjf2oW9W4TOL71bh"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1648,
+        304
+      ],
+      "id": "exec-qc",
+      "name": "EXEC_QC_Pipeline",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "CySQNloDhsLjAGhI"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1888,
+        304
+      ],
+      "id": "exec-dispatcher",
+      "name": "EXEC_Dispatcher",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_FinalLog - Standardized logging\nconst mapOutput = $('TRF_MapTargetWF').item.json;\nconst dispatcherOutput = $('EXEC_Dispatcher').item.json || {};\n\nconst elapsed_ms = Date.now() - mapOutput._meta.start_time;\n\nreturn [{\n  json: {\n    log: {\n      trace_id: mapOutput._meta.trace_id,\n      route: mapOutput.router.route,\n      target_wf_id: mapOutput.target_wf_id,\n      elapsed_ms: elapsed_ms,\n      created_count: dispatcherOutput.created_count || 0,\n      validation_flags: dispatcherOutput.validation_flags || {}\n    },\n    result: dispatcherOutput\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2160,
+        304
+      ],
+      "id": "final-log",
+      "name": "TRF_FinalLog"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "query_check",
+              "leftValue": "={{ $('TRF_MapTargetWF').item.json.router.route }}",
+              "rightValue": "query",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1184,
+        288
+      ],
+      "id": "chk_query",
+      "name": "CHK_IsQueryRoute"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "eDnggAlW92PmP53Y"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        1408,
+        208
+      ],
+      "id": "exec_formatter",
+      "name": "EXEC_QueryFormatter",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_FallbackResponse: CATCH-ALL — garante que SEMPRE há envelope + resposta\n// Reconhece TODOS os formatos de resposta dos sub-agents:\n// - WF03/WF05 Conversational/Config: agent_response.text (string)\n// - WF04 Query: agent_response.items (array) + query_meta (structured → vai para WF04B)\n// - WF06 Capture: summary (string)\n\nconst input = $json || {};\n\n// === ENVELOPE: pegar de múltiplas fontes ===\nlet envelope = {};\ntry { envelope = $('TRF_MapTargetWF').item.json.envelope || {}; } catch(e) {}\nif (!envelope.from_phone) {\n  try { envelope = $('TRG_FromGate').item.json.envelope || {}; } catch(e) {}\n}\nif (!envelope.from_phone) {\n  envelope = input.envelope || {};\n}\n\nconst userMessage = envelope.user_message || '';\nlet route = '';\ntry { route = $('TRF_MapTargetWF').item.json.router?.route || ''; } catch(e) {}\n\n// === CHECK 1: Resposta com texto direto (WF03, WF05) ===\nif (input.agent_response?.text && input.agent_response.text.length > 5) {\n  return [{\n    json: {\n      ...input,\n      envelope: envelope,\n      response_text: input.agent_response.text,\n      draft_text: input.agent_response.text,\n      user_message: userMessage,\n      _fallback: false\n    }\n  }];\n}\n\n// === CHECK 2: Resposta com summary (WF06 Capture) ===\nif (input.summary && input.summary.length > 5) {\n  return [{\n    json: {\n      envelope: envelope,\n      agent_response: {\n        text: input.summary,\n        agent: 'CAPTURE',\n        items_count: input.items_count || 0\n      },\n      response_text: input.summary,\n      draft_text: input.summary,\n      user_message: userMessage,\n      _fallback: false\n    }\n  }];\n}\n\n// === CHECK 3: Resposta estruturada com items (WF04 Query) ===\n// WF04 retorna agent_response.items (array) + query_meta\n// Isso é VÁLIDO — os items serão formatados pelo WF04B\nif (input.agent_response?.items && Array.isArray(input.agent_response.items)) {\n  return [{\n    json: {\n      ...input,\n      envelope: envelope,\n      user_message: userMessage,\n      _fallback: false\n    }\n  }];\n}\n\n// === CHECK 4: Resposta com query_meta (WF04 Query vazio) ===\n// Mesmo sem items, se tem query_meta, é resposta válida do WF04\nif (input.query_meta) {\n  return [{\n    json: {\n      ...input,\n      envelope: envelope,\n      user_message: userMessage,\n      _fallback: false\n    }\n  }];\n}\n\n// === CHECK 5: response_text ou output direto ===\nif (input.response_text && input.response_text.length > 5) {\n  return [{\n    json: {\n      ...input,\n      envelope: envelope,\n      agent_response: { text: input.response_text, agent: route || 'UNKNOWN' },\n      draft_text: input.response_text,\n      user_message: userMessage,\n      _fallback: false\n    }\n  }];\n}\n\n// === NENHUMA RESPOSTA VÁLIDA — gerar fallback inteligente ===\nlet fallbackText = '';\nif (route === 'query') {\n  fallbackText = 'Tudo tranquilo por aqui! 😊 Não encontrei nenhum compromisso registrado. Quer que eu crie algum lembrete?';\n} else if (route === 'capture') {\n  fallbackText = 'Hmm, não consegui processar isso agora. Pode repetir o que gostaria de salvar? 🤔';\n} else if (route === 'config') {\n  fallbackText = 'Não consegui atualizar a configuração. Pode tentar novamente? ⚙️';\n} else {\n  fallbackText = 'Oi! Estou aqui para ajudar. O que precisa? 😊';\n}\n\nreturn [{\n  json: {\n    envelope: envelope,\n    agent_response: {\n      text: fallbackText,\n      agent: 'FALLBACK',\n      items_count: 0\n    },\n    response_text: fallbackText,\n    draft_text: fallbackText,\n    user_message: userMessage,\n    _fallback: true,\n    validation_flags: {}\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        288
+      ],
+      "id": "fallback-001",
+      "name": "TRF_FallbackResponse"
+    },
+    {
+      "parameters": {
+        "path": "e466adf2-2566-4c12-be90-d21bbecedefc",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "00885428-ed28-4fec-981d-b4e5efddf723",
+      "name": "Webhook",
+      "webhookId": "e466adf2-2566-4c12-be90-d21bbecedefc"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TRG_FromGate": {
+      "main": [
+        [
+          {
+            "node": "Agent_Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent_Router": {
+      "main": [
+        [
+          {
+            "node": "TRF_MapTargetWF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_MapTargetWF": {
+      "main": [
+        [
+          {
+            "node": "EXEC_SubAgent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "EXEC_SubAgent": {
+      "main": [
+        [
+          {
+            "node": "TRF_FallbackResponse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "EXEC_QC_Pipeline": {
+      "main": [
+        [
+          {
+            "node": "EXEC_Dispatcher",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "EXEC_Dispatcher": {
+      "main": [
+        [
+          {
+            "node": "TRF_FinalLog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM_Primary": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agent_Router",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM_Fallback": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agent_Router",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Agent_Router",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parser_Route": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Agent_Router",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM_Retry": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Parser_Route",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CHK_IsQueryRoute": {
+      "main": [
+        [
+          {
+            "node": "EXEC_QueryFormatter",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "EXEC_QC_Pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "EXEC_QueryFormatter": {
+      "main": [
+        [
+          {
+            "node": "EXEC_QC_Pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_FallbackResponse": {
+      "main": [
+        [
+          {
+            "node": "CHK_IsQueryRoute",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "versionId": "3fcdb303-5fca-47af-85ed-385d0daf3da9",
+  "meta": {
+    "instanceId": "e5b5be90f9458642dd4b6a612950f8d170694c02cfe60ae6b638142ad8aa31e6"
+  },
+  "id": "M7vwU4TgVpj6pGvL",
+  "tags": [
+    {
+      "updatedAt": "2026-02-28T20:43:57.398Z",
+      "createdAt": "2026-02-28T20:43:57.398Z",
+      "id": "L6OShbFn4DQIWFov",
+      "name": "v3 EMII - staging"
+    }
+  ]
+}

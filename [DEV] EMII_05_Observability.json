@@ -1,0 +1,278 @@
+{
+  "name": "[DEV] EMII_05_Observability",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        304
+      ],
+      "id": "cron-6h",
+      "name": "TRG_Cron_6h"
+    },
+    {
+      "parameters": {
+        "operation": "select"
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        224,
+        208
+      ],
+      "id": "fetch-messages",
+      "name": "DB_FetchRecentMessages",
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "select"
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        224,
+        400
+      ],
+      "id": "fetch-items",
+      "name": "DB_FetchPendingItems",
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_BuildHealthReport - Monta relatório de saúde\nconst messages = $('DB_FetchRecentMessages').all().map(i => i.json);\nconst items = $('DB_FetchPendingItems').all().map(i => i.json);\n\nconst now = new Date();\nconst reportDate = now.toLocaleDateString('pt-BR');\nconst reportTime = now.toLocaleTimeString('pt-BR');\n\nconst totalMessages = messages.length;\nconst totalPending = items.length;\n\n// Contar itens atrasados\nconst overdueItems = items.filter(i => i.notify_at && new Date(i.notify_at) < now && !i.notified_at).length;\n\n// Contar por tipo de mensagem\nconst messagesByType = messages.reduce((acc, m) => {\n  acc[m.type] = (acc[m.type] || 0) + 1;\n  return acc;\n}, {});\n\n// Determinar status geral\nlet status = '✅ OK';\nlet alerts = [];\n\nif (overdueItems > 5) {\n  status = '⚠️ ATENÇÃO';\n  alerts.push(overdueItems + ' lembretes atrasados');\n}\n\nif (totalMessages === 0 && now.getHours() >= 8 && now.getHours() <= 22) {\n  alerts.push('Nenhuma mensagem nas últimas 6h (horário comercial)');\n}\n\nconst report = {\n  date: reportDate,\n  time: reportTime,\n  status: status,\n  metrics: {\n    messages_6h: totalMessages,\n    messages_by_type: messagesByType,\n    pending_items: totalPending,\n    overdue_reminders: overdueItems\n  },\n  alerts: alerts\n};\n\nreturn {\n  json: {\n    report: report,\n    should_alert: alerts.length > 0\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        304
+      ],
+      "id": "build-report",
+      "name": "TRF_BuildHealthReport"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "should-alert",
+              "leftValue": "={{ $json.should_alert }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        672,
+        304
+      ],
+      "id": "check-alert",
+      "name": "CHK_ShouldAlert"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_BuildAlertMessage - Monta mensagem de alerta\nconst report = $('TRF_BuildHealthReport').first().json.report;\n\nlet message = '🚨 *EMII Health Alert*\\n\\n';\nmessage += '📅 ' + report.date + ' ' + report.time + '\\n';\nmessage += 'Status: ' + report.status + '\\n\\n';\nmessage += '*Alertas:*\\n';\nreport.alerts.forEach(alert => {\n  message += '• ' + alert + '\\n';\n});\nmessage += '\\n*Métricas:*\\n';\nmessage += '• Mensagens (6h): ' + report.metrics.messages_6h + '\\n';\nmessage += '• Itens pendentes: ' + report.metrics.pending_items + '\\n';\nmessage += '• Lembretes atrasados: ' + report.metrics.overdue_reminders;\n\nreturn {\n  json: {\n    message: message,\n    tech_channel_phone: '5591984472580'\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        192
+      ],
+      "id": "build-alert",
+      "name": "TRF_BuildAlertMessage"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.z-api.io/instances/3EF161BDC6931254B5992E8547AF841B/token/A3A3332D51363D4CBD61F10B/send-text",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"phone\": \"{{ $json.tech_channel_phone }}\",\n  \"message\": \"{{ $json.message }}\"\n}",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1104,
+        192
+      ],
+      "id": "send-alert",
+      "name": "API_ZAPI_SendAlert"
+    },
+    {
+      "parameters": {
+        "jsCode": "// LOG_HealthOK - Sistema saudável\nconst report = $('TRF_BuildHealthReport').first().json.report;\n\nreturn {\n  json: {\n    status: 'healthy',\n    report: report,\n    checked_at: new Date().toISOString()\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        432
+      ],
+      "id": "log-ok",
+      "name": "LOG_HealthOK"
+    },
+    {
+      "parameters": {
+        "jsCode": "// LOG_AlertSent - Alerta enviado\nconst report = $('TRF_BuildHealthReport').first().json.report;\n\nreturn {\n  json: {\n    status: 'alert_sent',\n    report: report,\n    sent_at: new Date().toISOString()\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        192
+      ],
+      "id": "log-alert",
+      "name": "LOG_AlertSent"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TRG_Cron_6h": {
+      "main": [
+        [
+          {
+            "node": "DB_FetchRecentMessages",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "DB_FetchPendingItems",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_FetchRecentMessages": {
+      "main": [
+        [
+          {
+            "node": "TRF_BuildHealthReport",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_FetchPendingItems": {
+      "main": [
+        [
+          {
+            "node": "TRF_BuildHealthReport",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_BuildHealthReport": {
+      "main": [
+        [
+          {
+            "node": "CHK_ShouldAlert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CHK_ShouldAlert": {
+      "main": [
+        [
+          {
+            "node": "TRF_BuildAlertMessage",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "LOG_HealthOK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_BuildAlertMessage": {
+      "main": [
+        [
+          {
+            "node": "API_ZAPI_SendAlert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_ZAPI_SendAlert": {
+      "main": [
+        [
+          {
+            "node": "LOG_AlertSent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "versionId": "a7cedb3d-a3ef-4f42-82a6-fe9df88c71e4",
+  "meta": {
+    "instanceId": "e5b5be90f9458642dd4b6a612950f8d170694c02cfe60ae6b638142ad8aa31e6"
+  },
+  "id": "mVMOxlPK86aLfD4l",
+  "tags": [
+    {
+      "updatedAt": "2026-02-28T20:43:57.398Z",
+      "createdAt": "2026-02-28T20:43:57.398Z",
+      "id": "L6OShbFn4DQIWFov",
+      "name": "v3 EMII - staging"
+    }
+  ]
+}

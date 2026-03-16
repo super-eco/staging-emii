@@ -1,0 +1,2356 @@
+{
+  "name": "[DEV] EMII_01_InboundRouter",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "zapi_emii_inbound",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        -288
+      ],
+      "id": "efee7f2d-8eb8-47fa-959c-42911734d6b7",
+      "name": "TRG_Webhook_ZAPI",
+      "webhookId": "zapi_emii_inbound"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize Z-API payload and validate (v1.2 - fix body.body.text)\n// Goals:\n// - Use ONLY body.messageId as provider_message_id\n// - Handle both body.text.message (Z-API real) and body.body.text (test format)\n// - Keep whitelist + early exits\n\nconst input = $input.first().json;\nconst body = input.body || input;\n\n// provider_message_id: DO NOT fallback to other ids\nconst provider_message_id = body.messageId ?? null;\nif (!provider_message_id) {\n  return [{ json: { _exit: 'missing_messageId', status: 'ignored_missing_messageId' } }];\n}\n\nconst rawPhone = body.phone || body.from || '';\nconst digits = String(rawPhone).replace(/\\D/g, '');\n\nfunction canonicalizeBRPhone(d) {\n  let x = d.replace(/^0+/, '');\n  if (!x.startsWith('55') && (x.length === 10 || x.length === 11)) {\n    x = '55' + x;\n  }\n  if (x.startsWith('55') && x.length === 12) {\n    x = x.slice(0, 4) + '9' + x.slice(4);\n  }\n  if (x.startsWith('55') && x.length > 13) {\n    x = x.slice(0, 13);\n  }\n  return x;\n}\n\nconst from_phone = canonicalizeBRPhone(digits);\n\n// Whitelist canonical only\nconst WHITELIST = ['5593984236996'];\nif (!WHITELIST.includes(from_phone)) {\n  return [{\n    json: {\n      _exit: 'unauthorized',\n      status: 'ignored_unauthorized',\n      from_phone_raw: digits,\n      from_phone_canon: from_phone\n    }\n  }];\n}\n\nfunction normalizeToPhone(v) {\n  if (v === undefined || v === null) return null;\n  const s = String(v).trim();\n  if (!s) return null;\n  const lower = s.toLowerCase();\n  if (lower === 'empty' || lower === 'null' || lower === 'undefined' || lower === 'none' || lower === '-') {\n    return null;\n  }\n  const d = s.replace(/\\D/g, '');\n  if (!d) return null;\n  return canonicalizeBRPhone(d);\n}\n\nconst to_phone = normalizeToPhone(body.to || body.toPhone);\n\n// Determine message type + content\n// Handle multiple formats:\n// - Z-API real: body.text.message\n// - Test format: body.body.text\n// - Simple: body.text (string)\nlet type = 'text';\nlet text_raw = '';\nlet media_url = null;\n\n// Try different text formats\nif (body.text?.message) {\n  type = 'text';\n  text_raw = body.text.message;\n} else if (body.body?.text) {\n  // Test format: body.body.text\n  type = 'text';\n  text_raw = body.body.text;\n} else if (typeof body.text === 'string') {\n  // Simple string format\n  type = 'text';\n  text_raw = body.text;\n} else if (body.audio) {\n  type = 'audio';\n  media_url = body.audio.audioUrl || null;\n} else if (body.image) {\n  type = 'image';\n  media_url = body.image.imageUrl || null;\n} else if (body.document) {\n  type = 'document';\n  media_url = body.document.documentUrl || null;\n}\n\nconst meta = {\n  zapi: {\n    messageId: body.messageId ?? null,\n    timestamp: body.timestamp ?? body.time ?? null,\n    instanceId: body.instanceId ?? null,\n  },\n  from_phone,\n  to_phone,\n  content: {\n    type,\n    hasText: Boolean(text_raw),\n    hasAudio: Boolean(body.audio),\n    hasImage: Boolean(body.image),\n    hasDocument: Boolean(body.document),\n  }\n};\n\nreturn [{\n  json: {\n    _exit: null,\n    provider: 'zapi',\n    provider_message_id,\n    from_phone,\n    to_phone,\n    direction: 'in',\n    type,\n    text_raw,\n    media_url,\n    meta\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        -288
+      ],
+      "id": "f2cf4f89-310a-4efd-b3fc-b23d79df05ce",
+      "name": "TRF_NormalizeAndValidate"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json._exit }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "empty"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2016,
+        -288
+      ],
+      "id": "5f437b28-219b-42f8-9c95-b150fffec16b",
+      "name": "CHK_ShouldContinue"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: $json.status } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2240,
+        -192
+      ],
+      "id": "e40dbbc9-3878-4448-a2a6-916d2c59767e",
+      "name": "RSP_EarlyExit"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.is_duplicate }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2912,
+        -192
+      ],
+      "id": "a83ed996-25fc-434a-9ba3-aea66571331d",
+      "name": "CHK_IsDuplicate"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'duplicate', message_id: $json.existing_id } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3136,
+        -96
+      ],
+      "id": "611fcbd9-25e9-479f-b7d5-72f2853f7ef5",
+      "name": "RSP_Duplicate"
+    },
+    {
+      "parameters": {
+        "tableId": "messages",
+        "dataToSend": "autoMapInputData",
+        "inputsToIgnore": "_exit, is_duplicate, existing_id, status, timestamp, pending_intent"
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3136,
+        -288
+      ],
+      "id": "70eb0573-168a-4d52-9b14-2489b94c736e",
+      "name": "DB_SaveMessage",
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "messages",
+        "limit": 1,
+        "filterType": "string",
+        "filterString": "=provider=eq.{{ $json.provider }}&provider_message_id=eq.{{ $json.provider_message_id }}"
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1568,
+        -288
+      ],
+      "id": "2efde8a1-925b-4b2a-8179-cfb00a9b2cb0",
+      "name": "DB_CheckIdempotency",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ensure we always have output even if Supabase returned empty\nconst inputItems = $input.all();\nconst originalData = $('TRF_NormalizeAndValidate').first().json;\n\n// Check if we got any results from Supabase\nconst hasResults = inputItems.length > 0 && inputItems[0].json && inputItems[0].json.id;\n\nif (hasResults) {\n  return [{ json: { ...originalData, is_duplicate: true, existing_id: inputItems[0].json.id } }];\n} else {\n  return [{ json: { ...originalData, is_duplicate: false, existing_id: null } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        -288
+      ],
+      "id": "0e7cf175-924e-466d-bcdf-dd80fa980b47",
+      "name": "TRF_EnsureOutput",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"openai/gpt-4.1-mini\",\n  messages: [\n    { \n      role: \"system\", \n      content: `Você é um assistente executivo que extrai tarefas, lembretes e notas de mensagens de WhatsApp.\\n\\nIMPORTANTE: Uma mensagem pode conter MÚLTIPLOS itens. Analise cuidadosamente e extraia TODOS os itens mencionados.\\n\\nPara cada item identificado, extraia:\\n- type: \"reminder\" | \"task\" | \"note\"\\n- title: descrição curta do item\\n- due_at: data/hora ISO 8601 (se aplicável)\\n- notify_at: quando notificar (se for reminder)\\n- confidence: 0-100\\n\\nRetorne SEMPRE um array JSON no formato:\\n{\\n  \"items\": [\\n    {\\n      \"type\": \"reminder\",\\n      \"title\": \"Ligar pro médico\",\\n      \"due_at\": \"2026-02-03T10:00:00-03:00\",\\n      \"notify_at\": \"2026-02-03T09:45:00-03:00\",\\n      \"confidence\": 95\\n    },\\n    {\\n      \"type\": \"task\",\\n      \"title\": \"Pagar conta de luz\",\\n      \"due_at\": null,\\n      \"notify_at\": null,\\n      \"confidence\": 90\\n    }\\n  ],\\n  \"needs_clarification\": false,\\n  \"clarification_question\": null\\n}\\n\\nSe não conseguir extrair nenhum item ou precisar de mais informações:\\n{\\n  \"items\": [],\\n  \"needs_clarification\": true,\\n  \"clarification_question\": \"Qual horário você quer ser lembrado?\"\\n}\\n\\nTimezone do usuário: America/Belem (UTC-3)\\nData/hora atual: ${$now.toISO()}` \n    },\n    { \n      role: \"user\", \n      content: $json.text_raw \n    }\n  ],\n  max_tokens: 500,\n  temperature: 0.1\n}) }}",
+        "options": {}
+      },
+      "name": "API_LLM_Extract",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6272,
+        192
+      ],
+      "id": "f7f28334-d181-4be5-980e-ad946bbd1a10",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "6ergTsgANI55rcCV",
+          "name": "Infra_OpenRouter_HTTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse LLM extraction response and apply lead_time\nconst llmResponse = $input.first().json;\nconst inputData = $('TRF_BuildLLMContext').first().json;\n\nlet items = [];\nlet needsClarification = false;\nlet clarificationQuestion = '';\n\ntry {\n  const content = llmResponse.choices?.[0]?.message?.content || \"\";\n  const jsonMatch = content.match(/\\{[\\s\\S]*\\}/);\n  \n  if (jsonMatch) {\n    const parsed = JSON.parse(jsonMatch[0]);\n    \n    if (parsed.needs_clarification) {\n      needsClarification = true;\n      clarificationQuestion = parsed.clarification_question || 'Preciso de mais informações.';\n    } else if (parsed.items && Array.isArray(parsed.items)) {\n      items = parsed.items;\n    }\n  }\n} catch (e) {\n  console.log('Parse error:', e.message);\n  needsClarification = true;\n  clarificationQuestion = 'Não consegui entender. Pode reformular?';\n}\n\n// Get lead_time from user_prefs (default 900 = 15min)\nconst leadTimeSeconds = inputData.lead_time_default_seconds || 900;\n\n// Process each item and apply lead_time\nconst processedItems = items.map((item, idx) => {\n  let notify_at = null;\n  \n  // For reminders with due_at, calculate notify_at\n  if (item.type === 'reminder' && item.due_at) {\n    const dueDate = new Date(item.due_at);\n    const notifyDate = new Date(dueDate.getTime() - (leadTimeSeconds * 1000));\n    notify_at = notifyDate.toISOString();\n  }\n  \n  return {\n    ...inputData,\n    intent: item.type || 'task',\n    title: item.title || 'Sem título',\n    details: item.details || null,\n    due_at: item.due_at || null,\n    notify_at: notify_at,\n    needs_clarification: false,\n    is_multi_intent: items.length > 1,\n    item_index: idx,\n    total_items: items.length\n  };\n});\n\n// If needs clarification, return single item with clarification\nif (needsClarification) {\n  return [{\n    json: {\n      ...inputData,\n      needs_clarification: true,\n      clarification_question: clarificationQuestion,\n      is_multi_intent: false,\n      item_index: 0,\n      total_items: 0\n    }\n  }];\n}\n\n// Return all processed items\nreturn processedItems.map(item => ({ json: item }));\n"
+      },
+      "name": "TRF_ParseIntent",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6496,
+        192
+      ],
+      "id": "8030fa74-f61b-4661-8129-27f435373c90"
+    },
+    {
+      "parameters": {
+        "tableId": "items",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "owner_phone",
+              "fieldValue": "={{ $json.item.owner_phone }}"
+            },
+            {
+              "fieldId": "type",
+              "fieldValue": "={{ $json.item.type }}"
+            },
+            {
+              "fieldId": "title",
+              "fieldValue": "={{ $json.item.title }}"
+            },
+            {
+              "fieldId": "details",
+              "fieldValue": "={{ $json.item.details }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "={{ $json.item.status }}"
+            },
+            {
+              "fieldId": "due_at",
+              "fieldValue": "={{ $json.item.due_at }}"
+            },
+            {
+              "fieldId": "notify_at",
+              "fieldValue": "={{ $json.item.notify_at }}"
+            },
+            {
+              "fieldId": "source_message_id",
+              "fieldValue": "={{ $json.item.source_message_id }}"
+            }
+          ]
+        }
+      },
+      "name": "DB_CreateItem",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4400,
+        720
+      ],
+      "id": "569d36f2-2b78-4bc5-b358-23c8c56acc3f",
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.z-api.io/instances/3EF161BDC6931254B5992E8547AF841B/token/A3A3332D51363D4CBD61F10B/send-text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone: $('TRF_FormatReply').first().json.from_phone, message: $('TRF_FormatReply').first().json.reply_text }) }}",
+        "options": {}
+      },
+      "name": "API_ZAPI_Confirm",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4624,
+        720
+      ],
+      "id": "a149551b-fc42-44b6-b644-cfe4ac6eff91",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2wrd7ilBY0oPeHcv",
+          "name": "Vini_Business_ZAPI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'item_created', item_type: $('TRF_FormatReply').first().json.type, item_title: $('TRF_FormatReply').first().json.title, message_id: $('DB_SaveMessage').first().json.id }) }}",
+        "options": {}
+      },
+      "name": "RSP_ItemCreated",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        4848,
+        720
+      ],
+      "id": "405c52de-9ee4-4827-90eb-da45895a12d7"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "clarification-check",
+              "leftValue": "={{ $json.needs_clarification }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "CHK_NeedsClarification",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3952,
+        624
+      ],
+      "id": "9d993483-f8d1-448b-9bae-9528692c2907"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.z-api.io/instances/3EF161BDC6931254B5992E8547AF841B/token/A3A3332D51363D4CBD61F10B/send-text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone: $json.from_phone, message: $json.clarification_question }) }}",
+        "options": {}
+      },
+      "name": "API_ZAPI_Clarify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4176,
+        528
+      ],
+      "id": "6b0805ed-d2fe-469b-8e55-de66950b8904",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2wrd7ilBY0oPeHcv",
+          "name": "Vini_Business_ZAPI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'needs_clarification', question: $('TRF_ParseIntent').first().json.clarification_question, message_id: $('DB_SaveMessage').first().json.id }) }}",
+        "options": {}
+      },
+      "name": "RSP_Clarification",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        4624,
+        528
+      ],
+      "id": "35ee4631-eb5a-4f5e-b6ff-7b65aaafb508"
+    },
+    {
+      "parameters": {
+        "tableId": "pending_intents",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "owner_phone",
+              "fieldValue": "={{ $('TRF_ParseIntent').item.json.from_phone }}"
+            },
+            {
+              "fieldId": "original_message_id",
+              "fieldValue": "={{ $('TRF_ParseIntent').item.json.item.source_message_id }}"
+            },
+            {
+              "fieldId": "partial_intent",
+              "fieldValue": "={{ JSON.stringify($('TRF_ParseIntent').item.json.parsed_intent) }}"
+            },
+            {
+              "fieldId": "clarification_question",
+              "fieldValue": "={{ $('TRF_ParseIntent').item.json.parsed_intent.clarification_question }}"
+            },
+            {
+              "fieldId": "clarification_message_id",
+              "fieldValue": "={{ $('API_ZAPI_Clarify').item.json.messageId || '' }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "pending"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4400,
+        528
+      ],
+      "id": "ae5f2681-6dfd-4cec-8210-ee369c9ff2f8",
+      "name": "DB_SavePendingIntent",
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "pending_intents",
+        "limit": 20,
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "owner_phone",
+              "condition": "eq",
+              "keyValue": "={{ $json.from_phone }}"
+            },
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "pending"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2240,
+        -384
+      ],
+      "id": "c83d6b9b-91a7-44c0-9324-7b31d1cb2325",
+      "name": "DB_FindPendingIntent",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Preserve upstream payload and attach pending_intent if exists\nconst base = $('TRF_EnsureOutput').first().json;\n\nconst rows = $input.all().map(i => i.json).filter(r => r && r.id);\n\nif (!rows.length) {\n  return [{ json: { ...base, pending_intent: null } }];\n}\n\nrows.sort((a,b)=> new Date(b.created_at || 0) - new Date(a.created_at || 0));\n\nreturn [{ json: { ...base, pending_intent: rows[0] } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2464,
+        -384
+      ],
+      "id": "48d9a09f-d624-4c0e-8fe0-6bf98cf75b87",
+      "name": "TRF_PickLatestPending",
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "pending-check",
+              "leftValue": "={{$json.pending_intent.id}}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "exists",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2688,
+        -384
+      ],
+      "id": "1a7f20a1-8316-465a-9b7c-af6dcf6c55b1",
+      "name": "CHK_IsPendingClarification"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Merge clarification response with pending intent\n// Get the pending intent from the nested path\nconst inputData = $('TRF_PickLatestPending').first().json;\nconst pendingIntent = inputData.pending_intent || inputData;\nconst clarificationResponse = $('TRF_NormalizeAndValidate').first().json;\n\n// Parse the partial intent\nlet partialIntent;\ntry {\n    partialIntent = typeof pendingIntent.partial_intent === 'string' \n        ? JSON.parse(pendingIntent.partial_intent) \n        : pendingIntent.partial_intent;\n} catch (e) {\n    partialIntent = pendingIntent.partial_intent || {};\n}\n\n// Get current date in America/Belem timezone\nconst now = new Date();\nconst belemOffset = -3 * 60; // -03:00 in minutes\nconst belemTime = new Date(now.getTime() + (belemOffset - now.getTimezoneOffset()) * 60000);\nconst currentDate = belemTime.toISOString().split('T')[0];\n\n// Parse the clarification response to extract date/time\nconst responseText = clarificationResponse.text_raw || '';\n\n// Helper function to parse relative dates\nfunction parseDateTime(text, baseDate) {\n    const lower = text.toLowerCase().trim();\n    const today = new Date(baseDate);\n    \n    // Parse time patterns\n    const timeMatch = lower.match(/(\\d{1,2})(?::(\\d{2}))?\\s*(?:h|hrs?|horas?)?/i);\n    let hours = 9, minutes = 0;\n    if (timeMatch) {\n        hours = parseInt(timeMatch[1]);\n        minutes = timeMatch[2] ? parseInt(timeMatch[2]) : 0;\n    }\n    \n    // Parse day patterns\n    let targetDate = new Date(today);\n    \n    if (lower.includes('hoje')) {\n        // Today - keep targetDate as is\n    } else if (lower.includes('amanhã') || lower.includes('amanha')) {\n        targetDate.setDate(targetDate.getDate() + 1);\n    } else if (lower.includes('segunda')) {\n        const daysUntil = (1 - targetDate.getDay() + 7) % 7 || 7;\n        targetDate.setDate(targetDate.getDate() + daysUntil);\n    } else if (lower.includes('terça') || lower.includes('terca')) {\n        const daysUntil = (2 - targetDate.getDay() + 7) % 7 || 7;\n        targetDate.setDate(targetDate.getDate() + daysUntil);\n    } else if (lower.includes('quarta')) {\n        const daysUntil = (3 - targetDate.getDay() + 7) % 7 || 7;\n        targetDate.setDate(targetDate.getDate() + daysUntil);\n    } else if (lower.includes('quinta')) {\n        const daysUntil = (4 - targetDate.getDay() + 7) % 7 || 7;\n        targetDate.setDate(targetDate.getDate() + daysUntil);\n    } else if (lower.includes('sexta')) {\n        const daysUntil = (5 - targetDate.getDay() + 7) % 7 || 7;\n        targetDate.setDate(targetDate.getDate() + daysUntil);\n    } else if (lower.includes('sábado') || lower.includes('sabado')) {\n        const daysUntil = (6 - targetDate.getDay() + 7) % 7 || 7;\n        targetDate.setDate(targetDate.getDate() + daysUntil);\n    } else if (lower.includes('domingo')) {\n        const daysUntil = (0 - targetDate.getDay() + 7) % 7 || 7;\n        targetDate.setDate(targetDate.getDate() + daysUntil);\n    }\n    \n    // Set time\n    targetDate.setHours(hours, minutes, 0, 0);\n    \n    // Format as ISO8601 with -03:00 offset\n    const year = targetDate.getFullYear();\n    const month = String(targetDate.getMonth() + 1).padStart(2, '0');\n    const day = String(targetDate.getDate()).padStart(2, '0');\n    const h = String(hours).padStart(2, '0');\n    const m = String(minutes).padStart(2, '0');\n    \n    return `${year}-${month}-${day}T${h}:${m}:00-03:00`;\n}\n\n// Parse the response\nconst parsedDateTime = parseDateTime(responseText, currentDate);\n\n// Merge intent - INCLUDE owner_phone from pending intent!\nconst mergedIntent = {\n    ...partialIntent,\n    owner_phone: pendingIntent.owner_phone,\n    type: partialIntent.intent || partialIntent.type || 'task',\n    due_at: parsedDateTime,\n    notify_at: partialIntent.intent === 'reminder' ? parsedDateTime : null,\n    needs_clarification: false,\n    clarification_question: null,\n    status: 'open',\n    pending_intent_id: pendingIntent.id,\n    original_message_id: pendingIntent.original_message_id,\n    clarification_response: responseText\n};\n\nreturn [{json: mergedIntent}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3360,
+        -672
+      ],
+      "id": "4913d0bf-661c-4216-8f21-fb76e6657fec",
+      "name": "TRF_MergeIntent"
+    },
+    {
+      "parameters": {
+        "tableId": "items",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "owner_phone",
+              "fieldValue": "={{ $json.owner_phone }}"
+            },
+            {
+              "fieldId": "type",
+              "fieldValue": "={{ $json.type }}"
+            },
+            {
+              "fieldId": "title",
+              "fieldValue": "={{ $json.title }}"
+            },
+            {
+              "fieldId": "details",
+              "fieldValue": "={{ $json.details || '' }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "open"
+            },
+            {
+              "fieldId": "due_at",
+              "fieldValue": "={{ $json.due_at }}"
+            },
+            {
+              "fieldId": "notify_at",
+              "fieldValue": "={{ $json.notify_at }}"
+            },
+            {
+              "fieldId": "source_message_id",
+              "fieldValue": "={{ $json.original_message_id }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3584,
+        -672
+      ],
+      "id": "9990c95f-6212-4e6f-b8ee-0acc107f58b7",
+      "name": "DB_CreateItemFromMerge",
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "pending_intents",
+        "filterType": "string",
+        "filterString": "=id=eq.{{ $('TRF_MergeIntent').item.json.pending_intent_id }}",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "status",
+              "fieldValue": "resolved"
+            },
+            {
+              "fieldId": "resolved_at",
+              "fieldValue": "={{ new Date().toISOString() }}"
+            },
+            {
+              "fieldId": "resolved_item_id",
+              "fieldValue": "={{ $json.id }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3808,
+        -672
+      ],
+      "id": "7c85278e-7800-4f38-98cf-cad14516e6ff",
+      "name": "DB_ResolvePendingIntent",
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.z-api.io/instances/3EF161BDC6931254B5992E8547AF841B/token/A3A3332D51363D4CBD61F10B/send-text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone: $('TRF_MergeIntent').item.json.owner_phone, message: '✅ Entendido! ' + ($('TRF_MergeIntent').item.json.type === 'task' ? 'Tarefa' : ($('TRF_MergeIntent').item.json.type === 'reminder' ? 'Lembrete' : 'Item')) + ' criado:\\n\\n📌 ' + $('TRF_MergeIntent').item.json.title + '\\n📅 ' + ($('TRF_MergeIntent').item.json.due_at ? new Date($('TRF_MergeIntent').item.json.due_at).toLocaleString('pt-BR', {timeZone: 'America/Belem'}) : 'Sem prazo') }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4032,
+        -672
+      ],
+      "id": "1c28426e-bb7f-4278-bca5-bb67e9b98718",
+      "name": "API_ZAPI_ConfirmMerge",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2wrd7ilBY0oPeHcv",
+          "name": "Vini_Business_ZAPI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { status: 'clarification_resolved', item_id: $('DB_CreateItemFromMerge').item.json.id, pending_intent_id: $('TRF_MergeIntent').item.json.pending_intent_id } }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        4256,
+        -672
+      ],
+      "id": "2cfde16f-c09b-4559-9b6c-87ac0939844d",
+      "name": "RSP_MergeComplete"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Guard: only treat message as clarification response if it looks like date/time\nconst msg = ($('TRF_NormalizeAndValidate').first().json.text_raw || '').toString();\nconst lower = msg.toLowerCase();\n\nconst hasDigit = /\\d/.test(lower);\nconst hasKw = /(hoje|amanh|amanhã|segunda|terca|terça|quarta|quinta|sexta|sabado|sábado|domingo|\\b\\d{1,2}h\\b|\\bhs\\b|:|às| as )/.test(lower);\n\n// Attach flag to current pending_intent row (the current input item)\nreturn [{\n  json: {\n    ...$json,\n    _clarify_is_valid: (hasDigit || hasKw),\n    _clarify_msg_sample: msg.slice(0, 80)\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2912,
+        -576
+      ],
+      "id": "01f5aa33-6bf0-4ba8-b95a-86aa5127893f",
+      "name": "TRF_CheckClarificationResponse"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json._clarify_is_valid }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3136,
+        -576
+      ],
+      "id": "c8a6fc1e-febc-49fa-a3d9-a0665c8b09e9",
+      "name": "CHK_IsValidClarificationResponse"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.z-api.io/instances/3EF161BDC6931254B5992E8547AF841B/token/A3A3332D51363D4CBD61F10B/send-text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone: $('TRF_NormalizeAndValidate').first().json.from_phone, message: 'Ainda preciso de uma data/hora para finalizar. Ex: \"sexta 10h\" ou \"amanhã 18:30\".' }) }}",
+        "options": {}
+      },
+      "name": "API_ZAPI_ClarifyRepeat",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3360,
+        -480
+      ],
+      "id": "a08f9246-f7a6-4152-b168-ce7c036a27c9",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2wrd7ilBY0oPeHcv",
+          "name": "Vini_Business_ZAPI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'needs_clarification_repeat', question: 'Ainda preciso de uma data/hora para finalizar. Ex: \"sexta 10h\" ou \"amanhã 18:30\".', pending_id: $('TRF_PickLatestPending').first().json.pending_intent?.id }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3584,
+        -480
+      ],
+      "id": "4015ce59-d2e8-48f2-8468-236a0abb6a98",
+      "name": "RSP_ClarificationRepeat"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Check if DB_SaveMessage failed due to unique constraint violation\nconst input = $input.first();\n\n// Check if there was an error\nif (input.error) {\n    const errorMsg = input.error.message || '';\n    const errorDesc = input.error.description || '';\n    const fullError = errorMsg + ' ' + errorDesc;\n    \n    // Check for unique constraint violation\n    if (fullError.includes('duplicate key') || \n        fullError.includes('unique constraint') ||\n        fullError.includes('23505')) {\n        // Race condition detected - treat as duplicate\n        return [{\n            json: {\n                ...input.json,\n                _race_condition_duplicate: true,\n                status: 'duplicate'\n            }\n        }];\n    }\n    \n    // Other error - rethrow\n    throw new Error('DB_SaveMessage failed: ' + fullError);\n}\n\n// No error - continue normally\nreturn [{\n    json: {\n        ...input.json,\n        _race_condition_duplicate: false\n    }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3584,
+        -288
+      ],
+      "id": "3f96b485-f7ad-4e1c-8980-f05c9be216a8",
+      "name": "CHK_RaceCondition"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "race-check",
+              "leftValue": "={{ $json._race_condition_duplicate }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        3808,
+        -288
+      ],
+      "id": "07e657cd-1e77-4878-9e64-3931c64977d4",
+      "name": "CHK_RaceOK"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build query parameters for Supabase\n// Try to get hints from Router first\nlet queryType = 'pending';\nlet inputData = {};\n\ntry {\n  const routerData = $('TRF_ParseRouter').first().json;\n  queryType = routerData.router?.hints?.query_type || 'pending';\n  inputData = routerData;\n} catch (e) {\n  // Fallback to input\n  inputData = $input.first().json;\n}\n\nconst from_phone = inputData.from_phone;\nconst now = new Date();\nconst todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();\nconst todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString();\nconst tomorrowStart = todayEnd;\nconst tomorrowEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2).toISOString();\n\nlet filter = '';\nswitch (queryType) {\n    case 'today':\n        filter = `owner_phone=eq.${from_phone}&status=eq.open&notify_at=gte.${todayStart}&notify_at=lt.${todayEnd}`;\n        break;\n    case 'tomorrow':\n        filter = `owner_phone=eq.${from_phone}&status=eq.open&notify_at=gte.${tomorrowStart}&notify_at=lt.${tomorrowEnd}`;\n        break;\n    case 'overdue':\n        filter = `owner_phone=eq.${from_phone}&status=eq.open&notify_at=lt.${now.toISOString()}`;\n        break;\n    default:\n        filter = `owner_phone=eq.${from_phone}&status=eq.open`;\n}\n\nreturn [{\n    json: {\n        ...inputData,\n        query_type: queryType,\n        filter_string: filter\n    }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5376,
+        -480
+      ],
+      "id": "977c333e-4961-40d3-bc77-13c2c56f050e",
+      "name": "TRF_BuildQuery"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "items",
+        "limit": 5,
+        "filterType": "string",
+        "filterString": "={{ $json.filter_string }}"
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        5600,
+        -480
+      ],
+      "id": "899a7c01-b185-43c2-b219-acf328a57e87",
+      "name": "DB_QueryItems",
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format query response for WhatsApp\n// n8n returns each item as separate input, so we use $input.all()\nconst allItems = $input.all();\n\n// Try to get query_type from Router first, fallback to TRF_BuildQuery\nlet queryType = 'pending';\nlet originalData = {};\n\ntry {\n  const routerData = $('TRF_ParseRouter').first().json;\n  queryType = routerData.router?.hints?.query_type || 'pending';\n  originalData = routerData;\n} catch (e) {\n  try {\n    const buildQueryData = $('TRF_BuildQuery').first().json;\n    queryType = buildQueryData.query_type || 'pending';\n    originalData = buildQueryData;\n  } catch (e2) {\n    // Use defaults\n  }\n}\n\n// Build header based on query type\nlet header = '';\nswitch (queryType) {\n    case 'today': header = '📅 *AGENDA DE HOJE*'; break;\n    case 'tomorrow': header = '📅 *AGENDA DE AMANHÃ*'; break;\n    case 'overdue': header = '⚠️ *ITENS ATRASADOS*'; break;\n    default: header = '📋 *PENDÊNCIAS*';\n}\n\n// Extract items from n8n format\nconst items = allItems.map(item => item.json);\n\nif (!items || items.length === 0) {\n    return [{\n        json: {\n            ...originalData,\n            response_message: `${header}\\n\\nNenhum item encontrado! 🎉`\n        }\n    }];\n}\n\n// Format items\nconst itemLines = items.map((item, i) => {\n    const emoji = item.type === 'reminder' ? '🔔' : item.type === 'task' ? '📋' : '📝';\n    const title = item.title || 'Sem título';\n    let dueStr = '';\n    if (item.due_at) {\n        const due = new Date(item.due_at);\n        dueStr = due.toLocaleString('pt-BR', {\n            timeZone: 'America/Belem',\n            day: '2-digit',\n            month: '2-digit',\n            hour: '2-digit',\n            minute: '2-digit'\n        });\n    }\n    return `${i + 1}. ${emoji} ${title}${dueStr ? ` (${dueStr})` : ''}`;\n}).join('\\n');\n\nconst footer = items.length >= 5 ? '\\n\\n_Mostrando top 5. Diga \"mais\" para ver outros._' : '';\n\nconst message = `${header}\\n\\n${itemLines}${footer}`;\n\nreturn [{\n    json: {\n        ...originalData,\n        response_message: message\n    }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5824,
+        -480
+      ],
+      "id": "87c215ab-11c7-4b33-affc-1d2ab11f5ef2",
+      "name": "TRF_FormatQueryResponse"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.z-api.io/instances/3EF161BDC6931254B5992E8547AF841B/token/A3A3332D51363D4CBD61F10B/send-text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone: $json.from_phone, message: $json.response_message }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6048,
+        -480
+      ],
+      "id": "8e154120-a120-4254-aa77-5291cc28be7d",
+      "name": "API_ZAPI_QueryResponse",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2wrd7ilBY0oPeHcv",
+          "name": "Vini_Business_ZAPI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'query_response', query_type: $json.query_type }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        6272,
+        -480
+      ],
+      "id": "8381056e-e61a-45c2-8fb3-fa784c0d5f47",
+      "name": "RSP_Query"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.z-api.io/instances/3EF161BDC6931254B5992E8547AF841B/token/A3A3332D51363D4CBD61F10B/send-text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone: $json.from_phone, message: $json.final_response }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6496,
+        -672
+      ],
+      "id": "api-zapi-conversational",
+      "name": "API_ZAPI_ConversationalReply",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2wrd7ilBY0oPeHcv",
+          "name": "Vini_Business_ZAPI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'conversational_ack' }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        6720,
+        -672
+      ],
+      "id": "rsp-conversational",
+      "name": "RSP_Conversational"
+    },
+    {
+      "parameters": {
+        "jsCode": "function fmtDateBR(iso) {\n  if (!iso) return null;\n  const d = new Date(iso);\n  return d.toLocaleString('pt-BR', {\n    timeZone: 'America/Belem',\n    day: '2-digit', month: '2-digit',\n    hour: '2-digit', minute: '2-digit'\n  });\n}\n\nconst kind = $json.reply_kind || $json.intent || $json.type;\nconst title = ($json.reply_title || $json.title || '').trim();\nconst due = fmtDateBR($json.due_at);\nconst notify = fmtDateBR($json.notify_at);\nconst question = $json.clarification_question;\n\nlet msg = '';\n\nif (kind === 'clarify') {\n  msg = `❓ ${question || 'Preciso de uma data/hora para finalizar.'}`;\n} else if (kind === 'task') {\n  msg = `✅ Tarefa registrada: *${title || 'Sem título'}*`;\n  if (due) msg += `\\n📅 Prazo: ${due}`;\n} else if (kind === 'reminder') {\n  msg = `⏰ Lembrete agendado: *${title || 'Sem título'}*`;\n  if (notify) msg += `\\n📅 Quando: ${notify}`;\n} else if (kind === 'note') {\n  msg = `📝 Anotado.`;\n  if (title) msg += `\\n📌 ${title}`;\n} else {\n  msg = `✅ Feito.`;\n}\n\n// Create item object for DB_CreateItem\nconst item = {\n  owner_phone: $json.from_phone,\n  type: kind === 'clarify' ? 'task' : kind,\n  title: title || 'Sem título',\n  details: $json.details || null,\n  status: 'open',\n  due_at: $json.due_at || null,\n  notify_at: $json.notify_at || null,\n  source_message_id: $json.id || null\n};\n\nreturn [{ json: { ...$json, reply_text: msg, item: item } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4176,
+        720
+      ],
+      "id": "trf-format-reply",
+      "name": "TRF_FormatReply"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "messages",
+        "limit": 5,
+        "filterType": "string",
+        "filterString": "=from_phone=eq.{{ $json.from_phone }}&direction=eq.in"
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        5824,
+        192
+      ],
+      "id": "db-fetch-context",
+      "name": "DB_FetchRecentContext",
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const recent = $input.all().map(i => i.json).filter(x => x.text_raw);\n\n// Try to get original data from TRF_ParseRouter first, fallback to other sources\nlet originalData = {};\ntry {\n  originalData = $('TRF_ParseRouter').first().json;\n} catch (e) {\n  try {\n    originalData = $('CHK_IsConversational').first().json;\n  } catch (e2) {\n    originalData = $input.first().json;\n  }\n}\n\nconst nowMsg = originalData.text_raw;\n\nconst ctx = recent\n  .reverse()\n  .map(r => `- (${new Date(r.created_at).toLocaleString('pt-BR', {timeZone:'America/Belem'})}) ${r.text_raw}`)\n  .join('\\n');\n\nreturn [{\n  json: {\n    ...originalData,\n    llm_context: ctx || '(sem histórico)',\n    llm_current: nowMsg\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6048,
+        192
+      ],
+      "id": "trf-build-context",
+      "name": "TRF_BuildLLMContext"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "HTTP-Referer",
+              "value": "https://n8n.redesupereco.com"
+            },
+            {
+              "name": "X-Title",
+              "value": "EMII-CIA"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"openai/gpt-4.1-mini\",\n  \"temperature\": 0.7,\n  \"max_tokens\": 200,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Você é um assistente executivo via WhatsApp de um executivo de uma grande empresa. Quando o usuário enviar mensagens sociais (agradecimento, elogio, conversa), responda curto, humano e amigável. Não faça perguntas longas. Não crie tarefas. Não tente vender. Se fizer sentido, conclua com algo parecido com Qualquer coisa, só me chamar por aqui.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": {{ JSON.stringify(\"Contexto recente:\\n\" + ($('TRF_BuildCIAContext').first().json.cia_context || \"Sem contexto\") + \"\\n\\nMensagem atual:\\n\" + $('TRF_BuildCIAContext').first().json.text_raw + \"\\n\\nRetorne APENAS JSON:\\n{ \\\"response_type\\\": \\\"ack|empathy|celebrate|guide\\\", \\\"response_text\\\": \\\"...\\\" }\") }}\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "cia-llm-001",
+      "name": "API_CIA_LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5600,
+        -672
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "6ergTsgANI55rcCV",
+          "name": "Infra_OpenRouter_HTTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse CIA LLM response\nconst llmResponse = $input.first().json;\nlet responseText = \"Entendido! Qualquer coisa, só me chamar por aqui.\"; // fallback\n\ntry {\n  const content = llmResponse.choices?.[0]?.message?.content || \"\";\n  \n  // Try to parse JSON from response\n  const jsonMatch = content.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    const parsed = JSON.parse(jsonMatch[0]);\n    if (parsed.response_text) {\n      responseText = parsed.response_text;\n    }\n  }\n} catch (e) {\n  // Keep fallback\n}\n\n// Get original data\nconst originalData = $('TRF_NormalizeAndValidate').first().json;\n\nreturn [{\n  json: {\n    ...originalData,\n    cia_response: responseText,\n    cia_type: \"conversational\"\n  }\n}];"
+      },
+      "id": "cia-parse-001",
+      "name": "TRF_ParseCIAResponse",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5824,
+        -672
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "HTTP-Referer",
+              "value": "https://n8n.redesupereco.com"
+            },
+            {
+              "name": "X-Title",
+              "value": "EMII-EGA"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"openai/gpt-4.1-nano\",\n  \"temperature\": 0.2,\n  \"max_tokens\": 150,\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Você é um revisor de tom. Verifique se a resposta está adequada para um executivo. Se estiver OK, retorne approved=true. Se precisar ajustar, retorne approved=false com a versão corrigida.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": {{ JSON.stringify(\"Resposta original:\\n\" + ($('TRF_ParseCIAResponse').first().json.response_text || \"\") + \"\\n\\nRetorne APENAS JSON:\\n{ \\\"approved\\\": true|false, \\\"final_text\\\": \\\"...\\\" }\") }}\n    }\n  ]\n}",
+        "options": {}
+      },
+      "id": "ega-conv-001",
+      "name": "API_EGA_Conversational",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6048,
+        -672
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "6ergTsgANI55rcCV",
+          "name": "Infra_OpenRouter_HTTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse EGA response for conversational (SAFE)\nconst llmResponse = $input.first().json;\nconst originalData = $('TRF_ParseCIAResponse').first().json;\nlet finalText = originalData.cia_response; // fallback to CIA response\n\ntry {\n  const content = llmResponse.choices?.[0]?.message?.content || \"\";\n  const jsonMatch = content.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    const parsed = JSON.parse(jsonMatch[0]);\n    // Check if approved and final_text exists\n    if (parsed.approved === true && parsed.final_text) {\n      finalText = parsed.final_text;\n    } else if (parsed.approved === false && parsed.final_text) {\n      finalText = parsed.final_text;\n    }\n  }\n} catch (e) {\n  // Safe: keep fallback\n  console.log('EGA parse error, using original:', e.message);\n}\n\nreturn [{\n  json: {\n    ...originalData,\n    final_response: finalText\n  }\n}];"
+      },
+      "id": "ega-conv-parse-001",
+      "name": "TRF_ParseEGAConversational",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6272,
+        -672
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "messages",
+        "limit": 5,
+        "filterType": "string",
+        "filterString": "=from_phone=eq.{{ $('TRF_NormalizeAndValidate').first().json.from_phone }}&order=created_at.desc"
+      },
+      "id": "db-fetch-cia-context",
+      "name": "DB_FetchContextForCIA",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        5152,
+        -672
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build context for CIA from recent messages\nconst messages = $input.all().map(item => item.json);\n\n// Format recent messages as context\nlet context = '';\nif (messages.length > 0) {\n  context = messages.slice(0, 3).reverse().map(m => {\n    const dir = m.direction === 'in' ? 'Usuário' : 'Assistente';\n    const text = m.text_raw || m.extracted_text || '[mídia]';\n    return `${dir}: ${text}`;\n  }).join('\\n');\n}\n\nreturn [{\n  json: {\n    cia_context: context || 'Sem histórico recente',\n    from_phone: $('TRF_NormalizeAndValidate').first().json.from_phone,\n    text_raw: $('TRF_NormalizeAndValidate').first().json.text_raw\n  }\n}];\n"
+      },
+      "id": "trf-build-cia-context",
+      "name": "TRF_BuildCIAContext",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5376,
+        -672
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "dyvwDY9kH3PkiVFM",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "exec-wf-knowledge",
+      "name": "EXEC_KnowledgeRetrieval",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.2,
+      "position": [
+        5600,
+        -288
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "rsp-knowledge-new",
+      "name": "RSP_KnowledgeFromWF03",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        5824,
+        -288
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "messages",
+        "limit": 6,
+        "filterType": "string",
+        "filterString": "from_phone=eq.{{ $json.from_phone }}"
+      },
+      "name": "DB_FetchContextForRouter",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4032,
+        -288
+      ],
+      "id": "router-db-fetch-context",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build context string for Router LLM\nconst inputData = $('CHK_RaceOK').first().json;\n\n// Get messages from DB_FetchContextForRouter (may be empty array or object)\nlet messages = [];\ntry {\n  const fetchResult = $input.all();\n  if (fetchResult && fetchResult.length > 0) {\n    // Supabase returns array of items\n    messages = fetchResult.map(item => item.json);\n  }\n} catch (e) {\n  // No messages found\n}\n\n// Get recent messages (up to 3 in/out pairs)\nlet contextLines = [];\nif (Array.isArray(messages) && messages.length > 0) {\n  const sorted = messages.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));\n  const recent = sorted.slice(0, 6);\n  for (const msg of recent.reverse()) {\n    const dir = msg.direction === 'in' ? 'USER' : 'EMII';\n    const text = (msg.text_raw || '').substring(0, 100);\n    if (text) {\n      contextLines.push(`${dir}: ${text}`);\n    }\n  }\n}\n\nconst recent_context = contextLines.length > 0 \n  ? contextLines.join('\\n') \n  : '(sem histórico recente)';\n\nreturn [{\n  json: {\n    ...inputData,\n    recent_context,\n    text_raw: inputData.text_raw || ''\n  }\n}];\n"
+      },
+      "name": "TRF_BuildRouterContext",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4256,
+        -288
+      ],
+      "id": "router-trf-build-context"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"openai/gpt-4.1-mini\",\n  messages: [\n    { role: \"system\", content: `Você atua como um roteador de mensagens para um assistente executivo via WhatsApp. Sua tarefa é analisar cada mensagem recebida e determinar PARA QUAL ROTA ela deve ser direcionada, seguindo as regras e categorias abaixo:\\n- NÃO crie tarefas, NÃO responda ao usuário, apenas escolha a rota apropriada.\\n- Seja conservador: se houver qualquer dúvida, use sempre route=\"capture\".\\n- Categorias e rotas possíveis:\\n- Conversa social (cumprimentos, amenidades, etc.): route=\"conversational\"\\n- Pergunta sobre agenda, compromissos ou pendências: route=\"query\"\\n- Pergunta sobre informações previamente anotadas (ex: senha, código): route=\"knowledge\"\\n- Comando de preferência (\"sempre X antes\", \"nunca faça Y\"): route=\"config\"\\n- Em qualquer outro caso ou se não houver certeza: route=\"capture\"\\n- Marque always hints.is_multi=true se a mensagem contiver múltiplos horários ou datas; caso contrário, hints.is_multi deve ser false.\\n\\n## Output Format:\\nSempre retorne APENAS um objeto JSON válido no seguinte formato:\\n{\\n\"route\": \"[opção de rota: capture | conversational | query | knowledge | config]\",\\n\"confidence\": [0-100],\\n\"reason\": \"[1 frase explicando]\",\\n\"hints\": {\\n\"query_type\": \"[today|tomorrow|pending|overdue|null]\",\\n\"is_multi\": [true|false],\\n\"pref_change\": [true|false]\\n}\\n}\\n- Não inclua nenhum texto, explicação ou markdown.` },\n    { role: \"user\", content: `Contexto recente (últimas mensagens in/out):\n${$json.recent_context}\n\nMensagem atual:\n${$json.text_raw}\n\nRetorne APENAS JSON com o schema especificado.` }\n  ],\n  max_tokens: 260,\n  temperature: 0.1\n}) }}",
+        "options": {}
+      },
+      "name": "API_ROUTER_LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4480,
+        -288
+      ],
+      "id": "router-api-llm",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "6ergTsgANI55rcCV",
+          "name": "Infra_OpenRouter_HTTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Router LLM response\nconst inputData = $('TRF_BuildRouterContext').first().json;\nconst llmResponse = $input.first().json;\n\nlet route = 'fallback';\nlet confidence = 0;\nlet reason = 'parse_error';\nlet hints = { query_type: null, is_multi: false, pref_change: false };\n\ntry {\n  // Extract content from LLM response\n  let content = '';\n  if (llmResponse.choices && llmResponse.choices[0]) {\n    content = llmResponse.choices[0].message?.content || '';\n  }\n  \n  // Clean markdown if present\n  content = content.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n  \n  // Parse JSON\n  const parsed = JSON.parse(content);\n  \n  // Validate required fields\n  if (parsed.route && ['conversational', 'query', 'knowledge', 'config', 'capture'].includes(parsed.route)) {\n    route = parsed.route;\n    confidence = typeof parsed.confidence === 'number' ? parsed.confidence : 85;\n    reason = parsed.reason || 'LLM decision';\n    \n    if (parsed.hints) {\n      hints.query_type = parsed.hints.query_type || null;\n      hints.is_multi = parsed.hints.is_multi === true;\n      hints.pref_change = parsed.hints.pref_change === true;\n    }\n  }\n} catch (e) {\n  // Keep fallback values\n  reason = 'json_parse_error: ' + e.message;\n}\n\nreturn [{\n  json: {\n    ...inputData,\n    router: {\n      route,\n      confidence,\n      reason,\n      hints,\n      use_fallback: route === 'fallback' || confidence < 70\n    }\n  }\n}];\n"
+      },
+      "name": "TRF_ParseRouter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4704,
+        -288
+      ],
+      "id": "router-trf-parse"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.router.route }}",
+              "rightValue": "conversational",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "leftValue": "={{ $json.router.use_fallback }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notEquals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "IF_RouterConversational",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        4928,
+        -288
+      ],
+      "id": "router-if-conversational"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.router.route }}",
+              "rightValue": "query",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "IF_RouterQuery",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        5152,
+        -192
+      ],
+      "id": "router-if-query"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.router.route }}",
+              "rightValue": "knowledge",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "IF_RouterKnowledge",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        5376,
+        -96
+      ],
+      "id": "router-if-knowledge"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.router.route }}",
+              "rightValue": "config",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "IF_RouterConfig",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        5600,
+        0
+      ],
+      "id": "router-if-config"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"openai/gpt-4.1-mini\",\n  messages: [\n    { role: \"system\", content: `Você é um agente de preferências. Analise a mensagem do usuário e extraia a preferência que ele deseja configurar.\\n\\nPreferências suportadas:\\n- reminder_lead_time: tempo de antecedência para lembretes (em segundos)\\n- default_reminder_time: horário padrão para lembretes (formato HH:MM)\\n- quiet_hours_start: início do horário silencioso (formato HH:MM)\\n- quiet_hours_end: fim do horário silencioso (formato HH:MM)\\n\\nRetorne APENAS JSON no formato:\\n{\\n  \"preference_key\": \"nome_da_preferencia\",\\n  \"preference_value\": \"valor_extraido\",\\n  \"confirmation_message\": \"mensagem de confirmação para o usuário\"\\n}\\n\\nSe não conseguir identificar a preferência, retorne:\\n{\\n  \"preference_key\": null,\\n  \"preference_value\": null,\\n  \"confirmation_message\": \"Desculpe, não entendi qual preferência você quer configurar.\"\\n}` },\n    { role: \"user\", content: $json.text_raw }\n  ],\n  max_tokens: 200,\n  temperature: 0.1\n}) }}",
+        "options": {}
+      },
+      "name": "API_PA_LLM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5824,
+        -96
+      ],
+      "id": "pa-api-llm",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "6ergTsgANI55rcCV",
+          "name": "Infra_OpenRouter_HTTP"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Preferences Agent LLM response\nconst inputData = $('TRF_ParseRouter').first().json;\nconst llmResponse = $input.first().json;\n\nlet preference_key = null;\nlet preference_value = null;\nlet confirmation_message = 'Não consegui processar sua preferência.';\n\ntry {\n  let content = '';\n  if (llmResponse.choices && llmResponse.choices[0]) {\n    content = llmResponse.choices[0].message?.content || '';\n  }\n  \n  // Clean markdown if present\n  content = content.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim();\n  \n  const parsed = JSON.parse(content);\n  preference_key = parsed.preference_key;\n  preference_value = parsed.preference_value;\n  confirmation_message = parsed.confirmation_message || 'Preferência atualizada!';\n  \n  // Convert to seconds if needed (the table uses lead_time_default_seconds)\n  if (preference_key === 'reminder_lead_time' && typeof preference_value === 'number') {\n    // Value is already in seconds from LLM\n  }\n} catch (e) {\n  confirmation_message = 'Erro ao processar preferência: ' + e.message;\n}\n\nreturn [{\n  json: {\n    ...inputData,\n    preference_key,\n    preference_value,\n    confirmation_message,\n    has_valid_pref: preference_key !== null && preference_value !== null\n  }\n}];\n"
+      },
+      "name": "TRF_ParsePA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6048,
+        -96
+      ],
+      "id": "pa-trf-parse"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.has_valid_pref }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "IF_HasValidPref",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        6272,
+        -96
+      ],
+      "id": "pa-if-valid"
+    },
+    {
+      "parameters": {
+        "operation": "upsert"
+      },
+      "name": "DB_UpsertUserPrefs",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        6496,
+        -288
+      ],
+      "id": "pa-db-upsert",
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.z-api.io/instances/3EF161BDC6931254B5992E8547AF841B/token/A3A3332D51363D4CBD61F10B/send-text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone: $('TRF_ParsePA').first().json.from_phone, message: $('TRF_ParsePA').first().json.confirmation_message }) }}",
+        "options": {}
+      },
+      "name": "API_ZAPI_PrefsConfirm",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6720,
+        -288
+      ],
+      "id": "pa-zapi-confirm",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2wrd7ilBY0oPeHcv",
+          "name": "Vini_Business_ZAPI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'prefs_updated' }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "name": "RSP_PrefsConfirm",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        6944,
+        -288
+      ],
+      "id": "pa-rsp-confirm"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.z-api.io/instances/3EF161BDC6931254B5992E8547AF841B/token/A3A3332D51363D4CBD61F10B/send-text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone: $json.from_phone, message: $json.confirmation_message }) }}",
+        "options": {}
+      },
+      "name": "API_ZAPI_PrefsError",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6496,
+        0
+      ],
+      "id": "pa-zapi-error",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2wrd7ilBY0oPeHcv",
+          "name": "Vini_Business_ZAPI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ status: 'prefs_error' }) }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "name": "RSP_PrefsError",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        6720,
+        0
+      ],
+      "id": "pa-rsp-error"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare payload for WF04\nconst allItems = $input.all();\nconst firstItem = allItems[0].json;\n\n// Extract items array from LLM response\nconst items = allItems.map(item => ({\n  type: item.json.intent || 'task',\n  title: item.json.title || 'Sem título',\n  details: item.json.details || null,\n  due_at: item.json.due_at || null\n}));\n\nreturn [{\n  json: {\n    owner_phone: firstItem.from_phone,\n    source_message_id: firstItem.id,\n    items: items,\n    lead_time_default_seconds: firstItem.lead_time_default_seconds || 900\n  }\n}];"
+      },
+      "name": "TRF_PrepareWF04Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6720,
+        192
+      ],
+      "id": "trf-prepare-wf04-payload"
+    },
+    {
+      "parameters": {
+        "workflowId": "=XSlzV5OAs98QOF8x",
+        "options": {}
+      },
+      "name": "EXEC_CaptureItems",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        6944,
+        192
+      ],
+      "id": "exec-capture-items"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format final response with summary\nconst wf04Result = $input.first().json;\nconst originalData = $('TRF_ParseIntent').first().json;\n\nreturn [{\n  json: {\n    ...originalData,\n    reply_text: wf04Result.summary_text || '✅ Itens processados.',\n    created_count: wf04Result.created_count || 0\n  }\n}];"
+      },
+      "name": "TRF_FormatCaptureReply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7168,
+        192
+      ],
+      "id": "trf-format-capture-reply"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Start execution timer\nconst inputData = $input.first().json;\nreturn [{\n  json: {\n    ...inputData,\n    execution_start_ms: Date.now()\n  }\n}];"
+      },
+      "name": "TRF_StartTimer",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3360,
+        -288
+      ],
+      "id": "trf-start-timer"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare execution log\nconst inputData = $input.first().json;\nconst startTime = inputData.execution_start_ms || Date.now();\nconst elapsed_ms = Date.now() - startTime;\n\n// Try to get route from Router\nlet route = 'unknown';\nlet items_count = 0;\ntry {\n  const routerData = $('TRF_ParseRouter').first().json;\n  route = routerData.router?.route || 'unknown';\n} catch (e) {}\n\n// Try to get items_count from capture result\ntry {\n  const captureData = $('TRF_FormatCaptureReply').first().json;\n  items_count = captureData.created_count || 0;\n} catch (e) {}\n\nreturn [{\n  json: {\n    ...inputData,\n    execution_log: {\n      message_id: inputData.id,\n      owner_phone: inputData.from_phone,\n      route: route,\n      items_count: items_count,\n      elapsed_ms: elapsed_ms\n    }\n  }\n}];"
+      },
+      "name": "TRF_PrepareLog",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3952,
+        80
+      ],
+      "id": "trf-prepare-log"
+    },
+    {
+      "parameters": {
+        "tableId": "messages",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "metadata",
+              "fieldValue": "={{ JSON.stringify($json.execution_log) }}"
+            }
+          ]
+        }
+      },
+      "name": "DB_LogExecution",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3952,
+        304
+      ],
+      "id": "db-log-execution",
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      },
+      "continueOnFail": true
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TRG_Webhook_ZAPI": {
+      "main": [
+        [
+          {
+            "node": "TRF_NormalizeAndValidate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_NormalizeAndValidate": {
+      "main": [
+        [
+          {
+            "node": "DB_CheckIdempotency",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_CheckIdempotency": {
+      "main": [
+        [
+          {
+            "node": "TRF_EnsureOutput",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_EnsureOutput": {
+      "main": [
+        [
+          {
+            "node": "CHK_ShouldContinue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CHK_ShouldContinue": {
+      "main": [
+        [
+          {
+            "node": "DB_FindPendingIntent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "RSP_EarlyExit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_FindPendingIntent": {
+      "main": [
+        [
+          {
+            "node": "TRF_PickLatestPending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_PickLatestPending": {
+      "main": [
+        [
+          {
+            "node": "CHK_IsPendingClarification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CHK_IsPendingClarification": {
+      "main": [
+        [
+          {
+            "node": "TRF_CheckClarificationResponse",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "CHK_IsDuplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_CheckClarificationResponse": {
+      "main": [
+        [
+          {
+            "node": "CHK_IsValidClarificationResponse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CHK_IsValidClarificationResponse": {
+      "main": [
+        [
+          {
+            "node": "TRF_MergeIntent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "API_ZAPI_ClarifyRepeat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_MergeIntent": {
+      "main": [
+        [
+          {
+            "node": "DB_CreateItemFromMerge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_CreateItemFromMerge": {
+      "main": [
+        [
+          {
+            "node": "DB_ResolvePendingIntent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_ResolvePendingIntent": {
+      "main": [
+        [
+          {
+            "node": "API_ZAPI_ConfirmMerge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_ZAPI_ConfirmMerge": {
+      "main": [
+        [
+          {
+            "node": "RSP_MergeComplete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_ZAPI_ClarifyRepeat": {
+      "main": [
+        [
+          {
+            "node": "RSP_ClarificationRepeat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CHK_IsDuplicate": {
+      "main": [
+        [
+          {
+            "node": "DB_SaveMessage",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "RSP_Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_SaveMessage": {
+      "main": [
+        [
+          {
+            "node": "TRF_StartTimer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CHK_RaceCondition": {
+      "main": [
+        [
+          {
+            "node": "CHK_RaceOK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CHK_RaceOK": {
+      "main": [
+        [
+          {
+            "node": "DB_FetchContextForRouter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_BuildQuery": {
+      "main": [
+        [
+          {
+            "node": "DB_QueryItems",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_QueryItems": {
+      "main": [
+        [
+          {
+            "node": "TRF_FormatQueryResponse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_FormatQueryResponse": {
+      "main": [
+        [
+          {
+            "node": "API_ZAPI_QueryResponse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_ZAPI_QueryResponse": {
+      "main": [
+        [
+          {
+            "node": "RSP_Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_LLM_Extract": {
+      "main": [
+        [
+          {
+            "node": "TRF_ParseIntent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CHK_NeedsClarification": {
+      "main": [
+        [
+          {
+            "node": "API_ZAPI_Clarify",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "TRF_FormatReply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_ZAPI_Clarify": {
+      "main": [
+        [
+          {
+            "node": "DB_SavePendingIntent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_SavePendingIntent": {
+      "main": [
+        [
+          {
+            "node": "RSP_Clarification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_CreateItem": {
+      "main": [
+        [
+          {
+            "node": "API_ZAPI_Confirm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_ZAPI_Confirm": {
+      "main": [
+        [
+          {
+            "node": "RSP_ItemCreated",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_ZAPI_ConversationalReply": {
+      "main": [
+        [
+          {
+            "node": "RSP_Conversational",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_FetchRecentContext": {
+      "main": [
+        [
+          {
+            "node": "TRF_BuildLLMContext",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_BuildLLMContext": {
+      "main": [
+        [
+          {
+            "node": "API_LLM_Extract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_FormatReply": {
+      "main": [
+        [
+          {
+            "node": "DB_CreateItem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_CIA_LLM": {
+      "main": [
+        [
+          {
+            "node": "TRF_ParseCIAResponse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_ParseCIAResponse": {
+      "main": [
+        [
+          {
+            "node": "API_EGA_Conversational",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_EGA_Conversational": {
+      "main": [
+        [
+          {
+            "node": "TRF_ParseEGAConversational",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_ParseEGAConversational": {
+      "main": [
+        [
+          {
+            "node": "API_ZAPI_ConversationalReply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_FetchContextForCIA": {
+      "main": [
+        [
+          {
+            "node": "TRF_BuildCIAContext",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_BuildCIAContext": {
+      "main": [
+        [
+          {
+            "node": "API_CIA_LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "EXEC_KnowledgeRetrieval": {
+      "main": [
+        [
+          {
+            "node": "RSP_KnowledgeFromWF03",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_FetchContextForRouter": {
+      "main": [
+        [
+          {
+            "node": "TRF_BuildRouterContext",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_BuildRouterContext": {
+      "main": [
+        [
+          {
+            "node": "API_ROUTER_LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_ROUTER_LLM": {
+      "main": [
+        [
+          {
+            "node": "TRF_ParseRouter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_ParseRouter": {
+      "main": [
+        [
+          {
+            "node": "IF_RouterConversational",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_RouterConversational": {
+      "main": [
+        [
+          {
+            "node": "DB_FetchContextForCIA",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF_RouterQuery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_RouterQuery": {
+      "main": [
+        [
+          {
+            "node": "TRF_BuildQuery",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF_RouterKnowledge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_RouterKnowledge": {
+      "main": [
+        [
+          {
+            "node": "EXEC_KnowledgeRetrieval",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF_RouterConfig",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_RouterConfig": {
+      "main": [
+        [
+          {
+            "node": "API_PA_LLM",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB_FetchRecentContext",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_PA_LLM": {
+      "main": [
+        [
+          {
+            "node": "TRF_ParsePA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_ParsePA": {
+      "main": [
+        [
+          {
+            "node": "IF_HasValidPref",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF_HasValidPref": {
+      "main": [
+        [
+          {
+            "node": "DB_UpsertUserPrefs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "API_ZAPI_PrefsError",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_UpsertUserPrefs": {
+      "main": [
+        [
+          {
+            "node": "API_ZAPI_PrefsConfirm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_ZAPI_PrefsConfirm": {
+      "main": [
+        [
+          {
+            "node": "RSP_PrefsConfirm",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_ZAPI_PrefsError": {
+      "main": [
+        [
+          {
+            "node": "RSP_PrefsError",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_ParseIntent": {
+      "main": [
+        [
+          {
+            "node": "TRF_PrepareWF04Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_PrepareWF04Payload": {
+      "main": [
+        [
+          {
+            "node": "EXEC_CaptureItems",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "EXEC_CaptureItems": {
+      "main": [
+        [
+          {
+            "node": "TRF_FormatCaptureReply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_StartTimer": {
+      "main": [
+        [
+          {
+            "node": "CHK_RaceCondition",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "versionId": "cf81c9ea-7f0c-46f0-87ed-5cf75ea37578",
+  "meta": {
+    "instanceId": "e5b5be90f9458642dd4b6a612950f8d170694c02cfe60ae6b638142ad8aa31e6"
+  },
+  "id": "DyTH1UnnRkaYPVh3",
+  "tags": [
+    {
+      "updatedAt": "2026-02-28T20:43:57.398Z",
+      "createdAt": "2026-02-28T20:43:57.398Z",
+      "id": "L6OShbFn4DQIWFov",
+      "name": "v3 EMII - staging"
+    }
+  ]
+}

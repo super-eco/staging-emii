@@ -1,0 +1,237 @@
+{
+  "name": "[DEV] EMII_WF20_DISPATCHER",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        256,
+        304
+      ],
+      "id": "trigger",
+      "name": "TRG_FromOrchestrator",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_PrepareMessages V2 - Robust fallback for empty responses\n// Garantir envelope do trigger como fallback\nlet _triggerEnvelope = {};\ntry { _triggerEnvelope = $('TRG_FromOrchestrator').item.json.envelope || {}; } catch(e) {}\n\nconst input = $json;\n\n// Get envelope - check multiple locations with fallback\nconst envelope = input.envelope \n  || input.qc_result?.envelope \n  || input.agent_response?.envelope\n  || input.final_response?.envelope\n  || _triggerEnvelope\n  || {};\n\n// Validate envelope\nif (!envelope.from_phone) {\n  // Last resort: try to find phone in any nested object\n  const inputStr = JSON.stringify(input);\n  const phoneMatch = inputStr.match(/55\\d{10,11}/);\n  if (phoneMatch) {\n    envelope.from_phone = phoneMatch[0];\n  } else {\n    throw new Error('Envelope inválido: from_phone não encontrado.');\n  }\n}\n\n// Get the text to send - check ALL possible locations with robust fallback\nlet textToSend = '';\nlet fallbackUsed = false;\n\n// Priority 1: qc_result.final_text (from QC pipeline - most common)\nif (input.qc_result?.final_text && input.qc_result.final_text.trim().length > 0) {\n  textToSend = input.qc_result.final_text;\n}\n// Priority 2: qc_result.original_text (QC might have kept original)\nelse if (input.qc_result?.original_text && input.qc_result.original_text.trim().length > 0) {\n  textToSend = input.qc_result.original_text;\n}\n// Priority 3: agent_response.text (direct from agent)\nelse if (input.agent_response?.text && input.agent_response.text.trim().length > 0) {\n  textToSend = input.agent_response.text;\n}\n// Priority 4: final_response.text (legacy format)\nelse if (input.final_response?.text && input.final_response.text.trim().length > 0) {\n  textToSend = input.final_response.text;\n}\n// Priority 5: summary (from WF06 capture)\nelse if (input.summary && input.summary.trim().length > 0) {\n  textToSend = input.summary;\n}\n// Priority 6: text directly on input\nelse if (input.text && input.text.trim().length > 0) {\n  textToSend = input.text;\n}\n// Priority 7: response_text (another possible field)\nelse if (input.response_text && input.response_text.trim().length > 0) {\n  textToSend = input.response_text;\n}\n// Priority 8: Deep search in all string values\nelse {\n  fallbackUsed = true;\n  // Try to find any meaningful text in the input\n  const candidates = [];\n  function findTexts(obj, depth) {\n    if (depth > 3 || !obj) return;\n    if (typeof obj === 'string' && obj.trim().length > 10) {\n      candidates.push(obj.trim());\n    } else if (typeof obj === 'object') {\n      for (const [key, val] of Object.entries(obj)) {\n        if (['envelope', 'from_phone', 'to_phone', 'validation_flags'].includes(key)) continue;\n        findTexts(val, depth + 1);\n      }\n    }\n  }\n  findTexts(input, 0);\n  \n  if (candidates.length > 0) {\n    // Pick the longest candidate that looks like a message\n    textToSend = candidates.sort((a, b) => b.length - a.length)[0];\n  } else {\n    textToSend = 'Hmm, tive um problema ao processar sua mensagem. Pode tentar novamente?';\n  }\n}\n\n// Final safety: ensure text is not empty or just whitespace\nif (!textToSend || textToSend.trim().length === 0) {\n  textToSend = 'Hmm, tive um problema ao processar sua mensagem. Pode tentar novamente?';\n  fallbackUsed = true;\n}\n\n// Format phone number for Z-API\nlet toPhone = envelope.from_phone;\nif (!toPhone.includes('@')) {\n  toPhone = toPhone.replace(/[^0-9]/g, '') + '@s.whatsapp.net';\n}\n\nreturn [{\n  json: {\n    envelope: envelope,\n    to_phone: toPhone,\n    text: textToSend,\n    validation_flags: input.validation_flags || {},\n    qc_result: input.qc_result || {},\n    _fallback_used: fallbackUsed,\n    _fallback_warning: fallbackUsed ? 'WARNING: Fallback response used - original response was empty' : null\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        304
+      ],
+      "id": "prepare-messages",
+      "name": "TRF_PrepareMessages"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.z-api.io/instances/3EF161BDC6931254B5992E8547AF841B/token/A3A3332D51363D4CBD61F10B/send-text",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phone: $json.to_phone.replace('@s.whatsapp.net', ''), message: $json.text }) }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        752,
+        304
+      ],
+      "id": "zapi-send",
+      "name": "ZAPI_SendText",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "2wrd7ilBY0oPeHcv",
+          "name": "Vini_Business_ZAPI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_CheckSendResult - Check Z-API send result\nconst zapiResponse = $json;\nconst preparedData = $('TRF_PrepareMessages').item.json;\n\n// Check if send was successful\nconst success = zapiResponse.zaapId || zapiResponse.messageId || zapiResponse.id;\n\nreturn [{\n  json: {\n    envelope: preparedData.envelope,\n    to_phone: preparedData.to_phone,\n    text: preparedData.text,\n    send_success: !!success,\n    zapi_response: zapiResponse,\n    sent_at: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1008,
+        304
+      ],
+      "id": "check-result",
+      "name": "TRF_CheckSendResult"
+    },
+    {
+      "parameters": {
+        "tableId": "messages",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "provider_message_id",
+              "fieldValue": "={{ $json.envelope.trace_id + '_out' }}"
+            },
+            {
+              "fieldId": "direction",
+              "fieldValue": "out"
+            },
+            {
+              "fieldId": "from_phone",
+              "fieldValue": "EMII"
+            },
+            {
+              "fieldId": "to_phone",
+              "fieldValue": "={{ $json.to_phone.replace('@s.whatsapp.net', '') }}"
+            },
+            {
+              "fieldId": "type",
+              "fieldValue": "text"
+            },
+            {
+              "fieldId": "text_raw",
+              "fieldValue": "={{ $json.text }}"
+            },
+            {
+              "fieldId": "provider",
+              "fieldValue": "zapi"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1264,
+        304
+      ],
+      "id": "db-log-outbound",
+      "name": "DB_LogOutbound",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_BuildFinalResponse - Build final response\nconst preparedData = $('TRF_PrepareMessages').item.json;\nconst messages = preparedData.messages || [];\n\nreturn [{\n  json: {\n    envelope: preparedData.envelope,\n    dispatch_result: {\n      messages_sent: messages.length,\n      validation_flags: preparedData.validation_flags,\n      qc_approved: preparedData.qc_result?.approved ?? true\n    }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1504,
+        304
+      ],
+      "id": "build-final",
+      "name": "TRF_BuildFinalResponse"
+    },
+    {
+      "parameters": {
+        "path": "d5d89ea1-62cc-42c6-8195-d12fbcf0483c",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        128,
+        0
+      ],
+      "id": "53f90cdd-48fb-4bf4-9422-45fcb40c72f3",
+      "name": "Webhook",
+      "webhookId": "d5d89ea1-62cc-42c6-8195-d12fbcf0483c"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TRG_FromOrchestrator": {
+      "main": [
+        [
+          {
+            "node": "TRF_PrepareMessages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_PrepareMessages": {
+      "main": [
+        [
+          {
+            "node": "ZAPI_SendText",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ZAPI_SendText": {
+      "main": [
+        [
+          {
+            "node": "TRF_CheckSendResult",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_CheckSendResult": {
+      "main": [
+        [
+          {
+            "node": "DB_LogOutbound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_LogOutbound": {
+      "main": [
+        [
+          {
+            "node": "TRF_BuildFinalResponse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "versionId": "35bca508-2938-474f-8fdf-c0e06d613a39",
+  "meta": {
+    "instanceId": "e5b5be90f9458642dd4b6a612950f8d170694c02cfe60ae6b638142ad8aa31e6"
+  },
+  "id": "CySQNloDhsLjAGhI",
+  "tags": [
+    {
+      "updatedAt": "2026-02-28T20:43:57.398Z",
+      "createdAt": "2026-02-28T20:43:57.398Z",
+      "id": "L6OShbFn4DQIWFov",
+      "name": "v3 EMII - staging"
+    }
+  ]
+}

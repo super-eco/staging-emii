@@ -1,0 +1,464 @@
+{
+  "name": "[DEV] EMII_WF04_AG_QUERY",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -400,
+        304
+      ],
+      "id": "trigger",
+      "name": "TRG_FromOrchestrator",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "items",
+        "limit": 20,
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "owner_phone",
+              "condition": "eq",
+              "keyValue": "={{ $json.envelope.from_phone }}"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -208,
+        304
+      ],
+      "id": "db-fetch",
+      "name": "DB_FetchItems",
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "symdB55kj4PYoYwk",
+          "name": "Infra_Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_BuildItemsContext V3 - uses only $input, no cross-node paired item refs\nconst allItems = $input.all();\nconst firstItem = allItems[0]?.json || {};\nconst envelope = firstItem.envelope || {};\nconst router = firstItem.router || {};\nconst calendarEvents = firstItem._calendar_events || [];\nconst dbItems = allItems;\nconst TZ = 'America/Belem';\nconst now = new Date();\nconst nowLocal = now.toLocaleString('pt-BR', {timeZone: TZ});\nconst supabaseUrl = 'https://chtkfksjqcvlxpgyzlsf.supabase.co';\nconst supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNodGtma3NqcWN2bHhwZ3l6bHNmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjMwODU1NywiZXhwIjoyMDg3ODg0NTU3fQ.DM9wL7MlXRBuM_IYDk3pQ_q-WE7DYuwpqTTywg5A05U';\nconst ownerPhone = envelope.from_phone;\nlet masterPassword = null;\nlet userProvidedPassword = null;\ntry {\n  const prefs = await this.helpers.httpRequest({method: 'GET', url: supabaseUrl + '/rest/v1/user_prefs?owner_phone=eq.' + encodeURIComponent(ownerPhone) + '&select=lead_time_scope', headers: {'apikey': supabaseKey, 'Authorization': 'Bearer ' + supabaseKey}, json: true});\n  if (prefs && prefs.length > 0 && prefs[0].lead_time_scope) {\n    const scope = prefs[0].lead_time_scope;\n    if (scope.startsWith('master_pwd:')) masterPassword = scope.replace('master_pwd:', '');\n  }\n} catch(e) {}\nconst userMsg = (envelope.user_message || envelope.text_raw || '').toLowerCase();\nif (masterPassword && userMsg.includes(masterPassword.toLowerCase())) userProvidedPassword = true;\nlet query_type = 'general';\nlet dateRangeLabel = '';\nif (userMsg.match(/(?:^|\\s)(hoje|agora|hj)(?:\\s|$|[?,!.])/)) { query_type = 'today'; dateRangeLabel = 'hoje'; }\nelse if (userMsg.match(/amanh[aã]/)) { query_type = 'tomorrow'; dateRangeLabel = 'amanhã'; }\nelse if (userMsg.match(/(?:essa|esta)\\s+semana/)) { query_type = 'this_week'; dateRangeLabel = 'esta semana'; }\nelse if (userMsg.match(/pr[oó]xim[oa]s?\\s+dias?/) || userMsg.match(/pr[oó]xim[oa]s?\\s+semana/)) { query_type = 'upcoming'; dateRangeLabel = 'próximos dias'; }\nelse if (userMsg.match(/(?:^|\\s)(todos?|tudo|geral|completo)(?:\\s|$|[?,!.])/)) { query_type = 'all'; dateRangeLabel = 'todos'; }\nconst sensitiveKeywords = ['senha', 'password', 'pin', 'código', 'codigo', 'segredo', 'secret', 'chave', 'token', 'acesso'];\nfunction isSensitive(t, v) { return sensitiveKeywords.some(kw => ((t||'')+(v||'')).toLowerCase().includes(kw)); }\nfunction maskContent(t) { if (!t) return t; if (t.length <= 2) return '***'; return t[0] + '*'.repeat(Math.min(t.length-2,8)) + t[t.length-1]; }\nconst reminders = [], notes = [], tasks = [];\nconst dbEventIds = new Set();\nfor (const item of dbItems) {\n  const d = item.json || item;\n  if (d._empty) continue;\n  if (d.google_calendar_event_id) dbEventIds.add(d.google_calendar_event_id);\n  const dueAt = d.event_datetime ? new Date(d.event_datetime).toLocaleString('pt-BR', {timeZone: TZ}) : null;\n  const title = d.title || 'Sem título';\n  const status = d.status || 'open';\n  let details = d.value || '';\n  const type = (d.type || 'note').toLowerCase();\n  if (status === 'cancelled') continue;\n  const sensitive = isSensitive(title, details);\n  if (sensitive && masterPassword && !userProvidedPassword) details = details ? maskContent(details) : '';\n  let statusLabel = '';\n  if (d.event_datetime) {\n    const dueDate = new Date(d.event_datetime);\n    if (status === 'done') statusLabel = ' ✅ CONCLUÍDO';\n    else if (dueDate < now) statusLabel = ' ⚠️ ATRASADO';\n    else statusLabel = ' 🔵 PENDENTE';\n  } else { statusLabel = status === 'done' ? ' ✅' : ''; }\n  let line = '';\n  if (type === 'note') {\n    if (sensitive && masterPassword && !userProvidedPassword) line = '• ' + title + ' — 🔒 Conteúdo protegido' + statusLabel;\n    else line = details ? '• ' + title + ' — Conteúdo: ' + details + statusLabel : '• ' + title + statusLabel;\n  } else { line = '• ' + title + ' — ' + (dueAt || 'sem data') + statusLabel; }\n  if (type === 'reminder') reminders.push(line);\n  else if (type === 'task') tasks.push(line);\n  else notes.push(line);\n}\nconst calendarOnlyEvents = [];\nfor (const ev of calendarEvents) {\n  if (!dbEventIds.has(ev.id)) {\n    const startLocal = ev.start ? new Date(ev.start).toLocaleString('pt-BR', {timeZone: TZ}) : 'sem data';\n    let line = '• ' + ev.title + ' — ' + startLocal + ' 🔵 PENDENTE';\n    if (ev.meetLink) line += ' 📹 Meet';\n    if (ev.attendees) line += ' 👥 ' + ev.attendees;\n    line += ' [📅 Google Calendar]';\n    calendarOnlyEvents.push(line);\n  }\n}\nlet items_context = '';\nif (reminders.length > 0) items_context += 'LEMBRETES (' + reminders.length + '):\\n' + reminders.join('\\n') + '\\n\\n';\nif (calendarOnlyEvents.length > 0) items_context += 'EVENTOS DO GOOGLE CALENDAR (' + calendarOnlyEvents.length + '):\\n' + calendarOnlyEvents.join('\\n') + '\\n\\n';\nif (tasks.length > 0) items_context += 'TAREFAS (' + tasks.length + '):\\n' + tasks.join('\\n') + '\\n\\n';\nif (notes.length > 0) items_context += 'NOTAS SALVAS (' + notes.length + '):\\n' + notes.join('\\n') + '\\n\\n';\nif (!items_context) items_context = '(nenhum item encontrado para este usuário)';\nconst totalItems = reminders.length + tasks.length + notes.length + calendarOnlyEvents.length;\nlet passwordNotice = '';\nif (masterPassword && !userProvidedPassword && notes.some(n => n.includes('🔒'))) passwordNotice = '\\n⚠️ Notas protegidas. Informe sua contrasenha.';\nreturn [{json: {envelope, router, items_context: items_context.trim() + passwordNotice, items_count: totalItems, reminders_count: reminders.length, notes_count: notes.length, tasks_count: tasks.length, calendar_events_count: calendarOnlyEvents.length, current_time: nowLocal, tz: TZ, query_type, date_range_label: dateRangeLabel, _password_protected: !!masterPassword, _password_provided: !!userProvidedPassword}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        304
+      ],
+      "id": "build-context",
+      "name": "TRF_BuildItemsContext"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5.2",
+          "mode": "list",
+          "cachedResultName": "gpt-5.2"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 600
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -32,
+        560
+      ],
+      "id": "llm-primary",
+      "name": "LLM_Primary",
+      "credentials": {
+        "openAiApi": {
+          "id": "OyRKCJH0YdG2smVs",
+          "name": "Infra_OpenAi_Agents_Call"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1-mini"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 600,
+          "temperature": 0.3
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        128,
+        560
+      ],
+      "id": "llm-fallback",
+      "name": "LLM_Fallback",
+      "credentials": {
+        "openAiApi": {
+          "id": "OyRKCJH0YdG2smVs",
+          "name": "Infra_OpenAi_Agents_Call"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5.1-codex",
+          "mode": "list",
+          "cachedResultName": "gpt-5.1-codex"
+        },
+        "builtInTools": {},
+        "options": {
+          "maxTokens": 400
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        384,
+        768
+      ],
+      "id": "llm-retry",
+      "name": "LLM_Retry",
+      "credentials": {
+        "openAiApi": {
+          "id": "OyRKCJH0YdG2smVs",
+          "name": "Infra_OpenAi_Agents_Call"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.envelope.from_phone }}",
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        272,
+        576
+      ],
+      "id": "memory",
+      "name": "Memory"
+    },
+    {
+      "parameters": {
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"object\",\n  \"properties\": {\n    \"text\": { \"type\": \"string\" }\n  },\n  \"required\": [\"text\"],\n  \"additionalProperties\": false\n}",
+        "autoFix": true,
+        "customizeRetryPrompt": true,
+        "prompt": "Act as a strict JSON repair engine.\n\nMain instruction:\nReturn ONLY one valid JSON object with exactly one key: \"text\" (string).\nNo extra text. No markdown. No code fences.\n\nExample of the required output (literal):\n{{\"text\":\"your response here\"}}\n\nYou will receive:\n- error: {error}\n- instructions: {instructions}\n- completion: {completion}\n\nTask:\nFix the completion so it becomes valid JSON matching the schema.\nReturn only the JSON."
+      },
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "typeVersion": 1.3,
+      "position": [
+        464,
+        560
+      ],
+      "id": "parser",
+      "name": "Parser_Output"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Formate os itens do banco de dados em uma resposta amigável e estruturada.\nCONSULTA DO USUÁRIO: {{ $json.envelope.user_message || $json.envelope.text_raw }}\nTIPO DE CONSULTA: {{ $json.query_type }}\nPERÍODO SOLICITADO: {{ $json.date_range_label || 'geral' }}\nHORA ATUAL: {{ $json.current_time }}\nFUSO HORÁRIO: {{ $json.tz }}\nITENS DO BANCO ({{ $json.items_count }} encontrados):\n{{ $json.items_context }}\nIMPORTANTE: Use EXATAMENTE os horários mostrados acima. NÃO recalcule. Formate com bullet points (•). Adapte o cabeçalho ao TIPO DE CONSULTA.",
+        "hasOutputParser": true,
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "Você é EMII, assistente executivo pessoal de Márcio Aquino, CEO da rede de supermercados Super ECO no oeste do Pará. Atue como **Agente de Consulta do EMII**. Sua função é formatar os itens retornados do banco de dados em uma resposta amigável e estruturada.\n\n## REGRAS ABSOLUTAS\n1. Use apenas os itens fornecidos em items_context (que inclui itens do banco de dados E eventos do Google Calendar). Não invente itens, datas ou compromissos.\n2. Se items_context estiver vazio ou igual a \"(nenhum item encontrado)\", informe que não há itens agendados. Eventos marcados com [📅 Google Calendar] foram criados diretamente no calendário.\n3. Não exiba horários em UTC. Todos os horários já estão no fuso local (America/Belem, GMT-3).\n4. Não omita os indicadores de status (✅ CONCLUÍDO, ⚠️ ATRASADO, 🔵 PENDENTE) presentes em items_context.\n5. Não gere saudações genéricas. Responda diretamente à consulta do usuário.\n6. Não altere nem recalcule horários. Use exatamente os horários de items_context.\n7. Os itens estão organizados por seções: LEMBRETES, TAREFAS, EVENTOS DO GOOGLE CALENDAR e NOTAS SALVAS. Quando o usuário perguntar sobre um tipo específico (ex: \"lembretes\", \"notas\", \"tarefas\"), mostre APENAS os itens da seção correspondente. Quando perguntar \"agenda\" ou \"compromissos\" ou \"o que tenho\", mostre LEMBRETES, EVENTOS DO GOOGLE CALENDAR e TAREFAS (sem notas). Quando perguntar sobre uma nota específica (ex: \"senha do Wi-Fi\"), responda diretamente com o conteúdo DAQUELA nota, sem listar outros itens.\n8. Para consultas sobre notas específicas, responda de forma direta e objetiva.\n\n## REGRA CRÍTICA: BUSCA DE NOTAS ESPECÍFICAS\nQuando o usuário perguntar sobre uma nota específica (ex: \"qual a senha do wifi?\", \"qual o CNPJ?\"):\n- Procure em items_context a nota cujo TÍTULO corresponda ao que foi perguntado\n- \"qual a senha do wifi?\" → procure nota com título contendo \"Wi-Fi\" ou \"wifi\"\n- \"qual a senha do banco?\" → procure nota com título contendo \"banco\"\n- Se a nota solicitada NÃO EXISTE em items_context, diga: \"Não encontrei uma nota com essa informação salva.\"\n- NUNCA retorne uma nota diferente da solicitada. Se perguntou \"wifi\" e só existe \"banco\", diga que não encontrou a do wifi.\n- Se a nota está protegida (🔒), informe que é necessário fornecer a contrasenha.\n- Se existem múltiplas notas de senha, retorne APENAS a que corresponde à busca do usuário.\n\n## COMPREENSÃO TEMPORAL — REGRA CRÍTICA\nAnalise o campo TIPO DE CONSULTA e a CONSULTA DO USUÁRIO para determinar o período temporal:\n- **today**: Mostre APENAS itens com data de HOJE (a data em HORA ATUAL).\n- **tomorrow**: Mostre APENAS itens com data de AMANHÃ (dia seguinte à HORA ATUAL).\n- **this_week**: Mostre TODOS os itens da semana corrente (domingo a sábado). Agrupe por dia.\n- **upcoming**: Mostre itens de HOJE em diante (futuros). Agrupe por dia.\n- **general** ou sem tipo: Mostre todos os itens relevantes à consulta.\nIMPORTANTE: Quando o usuário pergunta \"essa semana\" ou \"próximos dias\", ele quer ver itens FUTUROS, não apenas os de hoje.\n\n## FORMATO DE RESPOSTA (OBRIGATÓRIO)\nAdapte o cabeçalho ao período consultado:\n- Para \"hoje\": \"Hoje, [DATA], você tem [N] [tipo(s)]:\"\n- Para \"amanhã\": \"Amanhã, [DATA], você tem [N] [tipo(s)]:\"\n- Para \"essa semana\": \"Esta semana você tem [N] [tipo(s)]:\" (agrupe por dia)\n- Para \"próximos dias\": \"Nos próximos dias você tem [N] [tipo(s)]:\" (agrupe por dia)\n- Para consulta geral: \"Você tem [N] [tipo(s)]:\"\nSempre use bullets (•) para listar itens.\nFinalize com \"Precisa de algo mais?\"\nSe não houver itens no período:\n\"[Período], você não tem compromissos agendados. Quer que eu crie algum lembrete?\"\n\n## CONTRATO DE SAÍDA (OBRIGATÓRIO)\n{\n  \"text\": \"Sua resposta formatada aqui\"\n}\n⚠️ Não inclua texto fora do JSON. Não utilize blocos de código markdown ao redor do JSON.\n\n## Output Format\nA saída deve ser um objeto JSON com o campo único \"text\", que contém a resposta conforme o FORMATO DE RESPOSTA.\n- O campo \"text\" (string): traz a resposta exatamente como especificado acima.\n- Se 'items_context' estiver vazio ou se não houver itens, sempre retorne a mensagem de agenda vazia.\n- Todos os valores devem ser texto simples, nunca markdown.\n- Substitua todos os placeholders pelos dados de items_context e HORA ATUAL."
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        208,
+        304
+      ],
+      "id": "agent-query",
+      "name": "Agent_Query"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_FormatResponse V3 - Includes Google Calendar events + safe references\nconst firstItem = $input.all()[0]?.json || {};\n\n// Get context - use .first() instead of .item to avoid paired item error\nlet context = {};\ntry { context = $('TRF_BuildItemsContext').first().json; } catch(e) { context = {}; }\n\nlet envelope = context.envelope || {};\nif (!envelope.from_phone) {\n  try { envelope = $('TRG_FromOrchestrator').first().json.envelope || {}; } catch(e) {}\n}\n\n// If empty\nif (context._empty === true || !context.items_context) {\n  return [{json: {\n    envelope: envelope,\n    user_message: envelope.user_message || '',\n    agent_response: {items: [], agent: 'QUERY', items_count: 0},\n    query_meta: {query_type: 'empty', tz: 'America/Belem', date_range_label: 'Nenhum item'}\n  }}];\n}\n\nconst TZ = context.tz || 'America/Belem';\nconst queryType = context.query_type || 'general';\nconst userMessage = envelope.user_message || context.user_message || '';\n\n// Get current date info\nconst now = new Date();\nconst localNow = new Date(now.toLocaleString('en-US', {timeZone: TZ}));\nconst todayStr = localNow.toLocaleDateString('pt-BR', {timeZone: TZ});\nconst tomorrow = new Date(localNow);\ntomorrow.setDate(tomorrow.getDate() + 1);\nconst tomorrowStr = tomorrow.toLocaleDateString('pt-BR', {timeZone: TZ});\nconst dayOfWeek = localNow.getDay();\nconst endOfWeek = new Date(localNow);\nendOfWeek.setDate(endOfWeek.getDate() + (6 - dayOfWeek));\nendOfWeek.setHours(23, 59, 59);\nconst weekdays = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];\n\n// Get DB items safely\nlet dbItems = [];\ntry { dbItems = $('GCal_MergeResults').all(); } catch(e) {\n  try { dbItems = $('TRF_EnsureItems').all(); } catch(e2) { dbItems = []; }\n}\n\n// Get calendar events from context\nconst calendarEvents = [];\ntry {\n  const mergeFirst = $('GCal_MergeResults').first().json;\n  const cals = mergeFirst._calendar_events || [];\n  calendarEvents.push(...cals);\n} catch(e) {}\n\n// Build DB items with date info\nconst allItems = [];\nconst dbEventIds = new Set();\n\nfor (const item of dbItems) {\n  const d = item.json || item;\n  if (d._empty) continue;\n  if (d.google_calendar_event_id) dbEventIds.add(d.google_calendar_event_id);\n  \n  let dateStr = '', weekday = '', timeStr = '', itemDate = null;\n  if (d.event_datetime) {\n    const dt = new Date(d.event_datetime);\n    itemDate = new Date(dt.toLocaleString('en-US', {timeZone: TZ}));\n    dateStr = dt.toLocaleDateString('pt-BR', {timeZone: TZ});\n    timeStr = dt.toLocaleTimeString('pt-BR', {timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false});\n    weekday = weekdays[new Date(dt.toLocaleString('en-US', {timeZone: TZ})).getDay()];\n  }\n  \n  let status = 'pending';\n  if (d.status === 'done') status = 'done';\n  else if (d.status === 'notified') status = 'notified';\n  \n  const itemObj = {date: dateStr, weekday, time: timeStr, title: d.title || 'Sem título', status, type: (d.type || 'note').toLowerCase(), value: d.value || '', source: 'supabase'};\n  \n  let include = false;\n  switch (queryType) {\n    case 'today': include = (dateStr === todayStr); break;\n    case 'tomorrow': include = (dateStr === tomorrowStr); break;\n    case 'this_week':\n      if (itemDate) include = (itemDate >= new Date(localNow.getFullYear(), localNow.getMonth(), localNow.getDate()) && itemDate <= endOfWeek);\n      if (!d.event_datetime && (d.type === 'task' || d.type === 'note')) include = true;\n      break;\n    case 'upcoming':\n      if (itemDate) include = (itemDate >= new Date(localNow.getFullYear(), localNow.getMonth(), localNow.getDate()));\n      if (!d.event_datetime && (d.type === 'task' || d.type === 'note')) include = true;\n      break;\n    default: include = true;\n  }\n  if (include) allItems.push(itemObj);\n}\n\n// Add Google Calendar events NOT in DB\nfor (const ev of calendarEvents) {\n  if (dbEventIds.has(ev.id)) continue;\n  \n  let dateStr = '', weekday = '', timeStr = '', itemDate = null;\n  if (ev.start) {\n    const dt = new Date(ev.start);\n    itemDate = new Date(dt.toLocaleString('en-US', {timeZone: TZ}));\n    dateStr = dt.toLocaleDateString('pt-BR', {timeZone: TZ});\n    timeStr = dt.toLocaleTimeString('pt-BR', {timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false});\n    weekday = weekdays[new Date(dt.toLocaleString('en-US', {timeZone: TZ})).getDay()];\n  }\n  \n  const itemObj = {date: dateStr, weekday, time: timeStr, title: ev.title || 'Sem título', status: 'pending', type: 'event', value: '', source: 'google_calendar', meetLink: ev.meetLink || '', attendees: ev.attendees || ''};\n  \n  let include = false;\n  switch (queryType) {\n    case 'today': include = (dateStr === todayStr); break;\n    case 'tomorrow': include = (dateStr === tomorrowStr); break;\n    case 'this_week':\n      if (itemDate) include = (itemDate >= new Date(localNow.getFullYear(), localNow.getMonth(), localNow.getDate()) && itemDate <= endOfWeek);\n      break;\n    case 'upcoming':\n      if (itemDate) include = (itemDate >= new Date(localNow.getFullYear(), localNow.getMonth(), localNow.getDate()));\n      break;\n    default: include = true;\n  }\n  if (include) allItems.push(itemObj);\n}\n\n// Sort by date/time\nallItems.sort((a, b) => {\n  if (!a.date && !b.date) return 0;\n  if (!a.date) return 1;\n  if (!b.date) return -1;\n  const dateA = a.date.split('/').reverse().join('-') + 'T' + (a.time || '00:00');\n  const dateB = b.date.split('/').reverse().join('-') + 'T' + (b.time || '00:00');\n  return dateA.localeCompare(dateB);\n});\n\nreturn [{json: {\n  envelope: envelope,\n  user_message: userMessage,\n  agent_response: {items: allItems, agent: 'QUERY', items_count: allItems.length},\n  query_meta: {query_type: queryType, tz: TZ, current_time: context.current_time, date_range_label: context.date_range_label || ''}\n}}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        304
+      ],
+      "id": "format-response",
+      "name": "TRF_FormatResponse"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_EnsureItems: Garante que SEMPRE há output mesmo com banco vazio\n// E SEMPRE propaga o envelope do trigger\nconst items = $input.all();\n\n// Pegar envelope do trigger (SEMPRE disponível)\nlet envelope = {};\ntry { envelope = $('TRG_FromOrchestrator').item.json.envelope || {}; } catch(e) {}\nif (!envelope.from_phone) {\n  // Fallback: tentar do primeiro item\n  envelope = items[0]?.json?.envelope || {};\n}\n\nif (items.length === 0 || (items.length === 1 && Object.keys(items[0].json).length <= 1)) {\n  // Banco vazio — retornar item sintético COM envelope\n  return [{\n    json: {\n      _empty: true,\n      _message: 'Nenhum item encontrado no banco',\n      envelope: envelope\n    }\n  }];\n}\n\n// Items existem — passar adiante com envelope garantido\nreturn items.map(item => ({\n  json: {\n    ...item.json,\n    _empty: false,\n    envelope: envelope\n  }\n}));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -16,
+        304
+      ],
+      "id": "ensure-items-001",
+      "name": "TRF_EnsureItems"
+    },
+    {
+      "parameters": {
+        "jsCode": "// GCal_PrepareDates: Calculate date range for Google Calendar query\nconst items = $input.all();\nconst envelope = $('TRG_FromOrchestrator').first().json.envelope || {};\nconst router = $('TRG_FromOrchestrator').first().json.router || {};\nconst userMsg = (envelope.user_message || envelope.text_raw || '').toLowerCase();\nconst TZ = 'America/Belem';\nconst dbItems = items.map(i => i.json);\nconst now = new Date();\nconst todayStart = new Date(now.toLocaleString('en-US', {timeZone: TZ}));\ntodayStart.setHours(0, 0, 0, 0);\nlet timeMin, timeMax;\nconst dateMatch = userMsg.match(/dia\\s+(\\d{1,2})(?:\\s+e\\s+(\\d{1,2}))?\\s+de\\s+(\\w+)/);\nif (dateMatch) {\n  const months = {'janeiro': 0, 'fevereiro': 1, 'março': 2, 'marco': 2, 'abril': 3, 'maio': 4, 'junho': 5, 'julho': 6, 'agosto': 7, 'setembro': 8, 'outubro': 9, 'novembro': 10, 'dezembro': 11};\n  const day1 = parseInt(dateMatch[1]);\n  const day2 = dateMatch[2] ? parseInt(dateMatch[2]) : day1;\n  const month = months[dateMatch[3]] !== undefined ? months[dateMatch[3]] : now.getMonth();\n  timeMin = new Date(now.getFullYear(), month, day1, 0, 0, 0);\n  timeMax = new Date(now.getFullYear(), month, day2, 23, 59, 59);\n} else if (userMsg.match(/amanh[aã]/)) {\n  timeMin = new Date(todayStart.getTime() + 86400000);\n  timeMax = new Date(todayStart.getTime() + 172800000);\n} else if (userMsg.match(/hoje/)) {\n  timeMin = todayStart;\n  timeMax = new Date(todayStart.getTime() + 86400000);\n} else if (userMsg.match(/(?:essa|esta)\\s+semana/) || userMsg.match(/semana/)) {\n  timeMin = todayStart;\n  timeMax = new Date(todayStart.getTime() + 604800000);\n} else if (userMsg.match(/pr[oó]xim/)) {\n  timeMin = todayStart;\n  timeMax = new Date(todayStart.getTime() + 1209600000);\n} else {\n  timeMin = todayStart;\n  timeMax = new Date(todayStart.getTime() + 604800000);\n}\nreturn [{json: {_db_items: dbItems, _timeMin: timeMin.toISOString(), _timeMax: timeMax.toISOString(), envelope: envelope, router: router}}];"
+      },
+      "id": "gcal-prepare-dates",
+      "name": "GCal_PrepareDates",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        0,
+        304
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "marcio.ma@redesupereco.com",
+          "mode": "list",
+          "cachedResultName": "Márcio Aquino - Super ECO"
+        },
+        "returnAll": true,
+        "options": {
+          "timeMin": "={{ $json._timeMin }}",
+          "timeMax": "={{ $json._timeMax }}"
+        }
+      },
+      "id": "gcal-fetch-native",
+      "name": "GCal_FetchEvents_Native",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1,
+      "position": [
+        208,
+        304
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "EjpsnzbHBHBfm42E",
+          "name": "Infra_Calendar"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// GCal_MergeResults: Merge DB items + Google Calendar events\nconst calendarRawEvents = $input.all();\nconst prepData = $('GCal_PrepareDates').first().json;\nconst dbItems = prepData._db_items || [];\nconst envelope = prepData.envelope || {};\nconst router = prepData.router || {};\nconst calendarEvents = calendarRawEvents\n  .filter(e => e.json && e.json.id)\n  .map(e => {\n    const ev = e.json;\n    return {\n      id: ev.id || '',\n      title: ev.summary || 'Sem título',\n      start: ev.start?.dateTime || ev.start?.date || ev.start || '',\n      end: ev.end?.dateTime || ev.end?.date || ev.end || '',\n      description: ev.description || '',\n      meetLink: ev.hangoutLink || '',\n      attendees: (ev.attendees || []).map(a => a.email || a).join(', '),\n      source: 'google_calendar'\n    };\n  });\nif (dbItems.length === 0) {\n  return [{json: {_empty: true, _message: 'Nenhum item no banco', envelope: envelope, router: router, _calendar_events: calendarEvents, _calendar_events_count: calendarEvents.length}}];\n}\nreturn dbItems.map((item, idx) => ({json: {...item, envelope: envelope, router: router, _calendar_events: idx === 0 ? calendarEvents : [], _calendar_events_count: idx === 0 ? calendarEvents.length : 0}}));"
+      },
+      "id": "gcal-merge-results",
+      "name": "GCal_MergeResults",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        304
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "path": "653063d3-c1f5-419d-b3ee-82c368cd791a",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -512,
+        704
+      ],
+      "id": "488e0087-e0b7-41d0-b8c4-7411b8436f0a",
+      "name": "Webhook",
+      "webhookId": "653063d3-c1f5-419d-b3ee-82c368cd791a"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TRG_FromOrchestrator": {
+      "main": [
+        [
+          {
+            "node": "DB_FetchItems",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_FetchItems": {
+      "main": [
+        [
+          {
+            "node": "TRF_EnsureItems",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_BuildItemsContext": {
+      "main": [
+        [
+          {
+            "node": "Agent_Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent_Query": {
+      "main": [
+        [
+          {
+            "node": "TRF_FormatResponse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM_Primary": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agent_Query",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM_Fallback": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agent_Query",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Agent_Query",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parser_Output": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Agent_Query",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM_Retry": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Parser_Output",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_EnsureItems": {
+      "main": [
+        [
+          {
+            "node": "GCal_PrepareDates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GCal_PrepareDates": {
+      "main": [
+        [
+          {
+            "node": "GCal_FetchEvents_Native",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GCal_FetchEvents_Native": {
+      "main": [
+        [
+          {
+            "node": "GCal_MergeResults",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GCal_MergeResults": {
+      "main": [
+        [
+          {
+            "node": "TRF_BuildItemsContext",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "versionId": "44431647-c77e-4eb3-bae6-d5df1872662b",
+  "meta": {
+    "instanceId": "e5b5be90f9458642dd4b6a612950f8d170694c02cfe60ae6b638142ad8aa31e6"
+  },
+  "id": "UODQp3FWJuXANRqy",
+  "tags": [
+    {
+      "updatedAt": "2026-02-28T20:43:57.398Z",
+      "createdAt": "2026-02-28T20:43:57.398Z",
+      "id": "L6OShbFn4DQIWFov",
+      "name": "v3 EMII - staging"
+    }
+  ]
+}

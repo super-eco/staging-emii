@@ -1,0 +1,317 @@
+{
+  "name": "[DEV] EMII_02_ReminderScheduler",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        272
+      ],
+      "id": "cron-trigger",
+      "name": "TRG_Cron_1min"
+    },
+    {
+      "parameters": {
+        "jsCode": "// DB_FetchDueItems - Fetch items with due notifications via Supabase REST API\nconst supabaseUrl = 'https://chtkfksjqcvlxpgyzlsf.supabase.co';\nconst supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNodGtma3NqcWN2bHhwZ3l6bHNmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjMwODU1NywiZXhwIjoyMDg3ODg0NTU3fQ.DM9wL7MlXRBuM_IYDk3pQ_q-WE7DYuwpqTTywg5A05U';\n\nconst now = new Date().toISOString();\n\ntry {\n  const response = await this.helpers.httpRequest({\n    method: 'GET',\n    url: supabaseUrl + '/rest/v1/items?type=in.(reminder,task)&notification_datetime=lte.' + now + '&notification_sent_at=is.null&status=in.(open,doing)&select=*',\n    headers: {\n      'apikey': supabaseKey,\n      'Authorization': 'Bearer ' + supabaseKey,\n      'Content-Type': 'application/json'\n    },\n    json: true\n  });\n  \n  if (Array.isArray(response) && response.length > 0) {\n    return response.map(item => ({ json: item }));\n  } else {\n    return [{ json: { id: null, _no_items: true } }];\n  }\n} catch (e) {\n  return [{ json: { id: null, _error: e.message } }];\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        272
+      ],
+      "id": "fetch-due",
+      "name": "DB_FetchDueItems"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-items",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        448,
+        272
+      ],
+      "id": "has-items",
+      "name": "CHK_HasItems"
+    },
+    {
+      "parameters": {
+        "jsCode": "// TRF_BuildReminderMessage - Monta mensagem de lembrete\nconst items = $input.all();\nconst results = [];\n\nfor (const inputItem of items) {\n  const item = inputItem.json;\n  const typeEmojis = { 'task': '📋', 'reminder': '⏰' };\n  const emoji = typeEmojis[item.type] || '⏰';\n\n  let message = emoji + ' *Lembrete:* ' + item.title;\n\n  if (item.value) {\n    message += '\\n_' + item.value + '_';\n  }\n\n  if (item.event_datetime) {\n    const eventDate = new Date(item.event_datetime);\n    const options = { timeZone: 'America/Belem', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false };\n    message += '\\n📅 ' + eventDate.toLocaleString('pt-BR', options);\n  }\n\n  results.push({\n    json: {\n      item_id: item.id,\n      owner_phone: item.owner_phone,\n      message: message,\n      title: item.title\n    }\n  });\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        176
+      ],
+      "id": "build-message",
+      "name": "TRF_BuildReminderMessage"
+    },
+    {
+      "parameters": {
+        "jsCode": "// API_ZAPI_SendReminder - Send reminder via Z-API with proper JSON handling\nconst items = $input.all();\nconst results = [];\n\nfor (const inputItem of items) {\n  const item = inputItem.json;\n  const phone = item.owner_phone;\n  const message = item.message;\n  \n  try {\n    const response = await this.helpers.httpRequest({\n      method: 'POST',\n      url: 'https://api.z-api.io/instances/3EF161BDC6931254B5992E8547AF841B/token/A3A3332D51363D4CBD61F10B/send-text',\n      headers: {\n        'Content-Type': 'application/json',\n        'Client-Token': 'Fdb6aa1c0f1b74b2a8b3e4f5c6d7e8f9a0b1c2d3'\n      },\n      body: {\n        phone: phone,\n        message: message\n      },\n      json: true,\n      timeout: 10000\n    });\n    \n    results.push({\n      json: {\n        ...item,\n        _zapi_success: true,\n        _zapi_response: response\n      }\n    });\n  } catch (e) {\n    results.push({\n      json: {\n        ...item,\n        _zapi_success: false,\n        _zapi_error: e.message\n      }\n    });\n  }\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        176
+      ],
+      "id": "send-reminder",
+      "name": "API_ZAPI_SendReminder"
+    },
+    {
+      "parameters": {
+        "jsCode": "// DB_MarkNotified - Mark item as notified via Supabase REST API\nconst supabaseUrl = 'https://chtkfksjqcvlxpgyzlsf.supabase.co';\nconst supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNodGtma3NqcWN2bHhwZ3l6bHNmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjMwODU1NywiZXhwIjoyMDg3ODg0NTU3fQ.DM9wL7MlXRBuM_IYDk3pQ_q-WE7DYuwpqTTywg5A05U';\n\nconst items = $input.all();\nconst results = [];\n\nfor (const inputItem of items) {\n  const item = inputItem.json;\n  const itemId = item.item_id;\n  \n  if (!itemId) {\n    results.push({ json: { ...item, _mark_error: 'No item_id' } });\n    continue;\n  }\n  \n  try {\n    await this.helpers.httpRequest({\n      method: 'PATCH',\n      url: supabaseUrl + '/rest/v1/items?id=eq.' + itemId,\n      headers: {\n        'apikey': supabaseKey,\n        'Authorization': 'Bearer ' + supabaseKey,\n        'Content-Type': 'application/json',\n        'Prefer': 'return=representation'\n      },\n      body: {\n        notification_sent_at: new Date().toISOString(),\n        status: 'notified'\n      },\n      json: true\n    });\n    results.push({ json: { ...item, _marked: true } });\n  } catch (e) {\n    results.push({ json: { ...item, _mark_error: e.message } });\n  }\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        80
+      ],
+      "id": "mark-notified",
+      "name": "DB_MarkNotified"
+    },
+    {
+      "parameters": {
+        "jsCode": "// LOG_ReminderSent - Log de lembrete enviado\nconst reminderData = $('TRF_BuildReminderMessage').first().json;\n\nreturn {\n  json: {\n    status: 'sent',\n    item_id: reminderData.item_id,\n    owner_phone: reminderData.owner_phone,\n    title: reminderData.title,\n    sent_at: new Date().toISOString()\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        80
+      ],
+      "id": "log-sent",
+      "name": "LOG_ReminderSent"
+    },
+    {
+      "parameters": {
+        "jsCode": "// LOG_ReminderFailed - Log de falha no envio\nconst reminderData = $('TRF_BuildReminderMessage').first().json;\nconst error = $input.first().json;\n\nreturn {\n  json: {\n    status: 'failed',\n    item_id: reminderData.item_id,\n    owner_phone: reminderData.owner_phone,\n    title: reminderData.title,\n    error: error.message || JSON.stringify(error),\n    failed_at: new Date().toISOString()\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        272
+      ],
+      "id": "log-failed",
+      "name": "LOG_ReminderFailed"
+    },
+    {
+      "parameters": {
+        "jsCode": "// LOG_NoReminders - Nenhum lembrete pendente\nreturn {\n  json: {\n    status: 'no_reminders',\n    checked_at: new Date().toISOString()\n  }\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        368
+      ],
+      "id": "log-no-reminders",
+      "name": "LOG_NoReminders"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "zapi-success",
+              "leftValue": "={{ $json._zapi_success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        176
+      ],
+      "id": "check-zapi-result",
+      "name": "CHK_ZAPIResult"
+    },
+    {
+      "parameters": {
+        "jsCode": "// DB_MarkNotified_Fail - Mark item as notified even on ZAPI failure (prevent infinite retries)\nconst supabaseUrl = 'https://chtkfksjqcvlxpgyzlsf.supabase.co';\nconst supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNodGtma3NqcWN2bHhwZ3l6bHNmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MjMwODU1NywiZXhwIjoyMDg3ODg0NTU3fQ.DM9wL7MlXRBuM_IYDk3pQ_q-WE7DYuwpqTTywg5A05U';\n\nconst items = $input.all();\nconst results = [];\n\nfor (const inputItem of items) {\n  const item = inputItem.json;\n  const itemId = item.item_id;\n  \n  if (!itemId) {\n    results.push({ json: { ...item, _mark_error: 'No item_id' } });\n    continue;\n  }\n  \n  try {\n    await this.helpers.httpRequest({\n      method: 'PATCH',\n      url: supabaseUrl + '/rest/v1/items?id=eq.' + itemId,\n      headers: {\n        'apikey': supabaseKey,\n        'Authorization': 'Bearer ' + supabaseKey,\n        'Content-Type': 'application/json',\n        'Prefer': 'return=representation'\n      },\n      body: {\n        notification_sent_at: new Date().toISOString(),\n        status: 'notified'\n      },\n      json: true\n    });\n    results.push({ json: { ...item, _marked: true } });\n  } catch (e) {\n    results.push({ json: { ...item, _mark_error: e.message } });\n  }\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        272
+      ],
+      "id": "mark-notified-fail",
+      "name": "DB_MarkNotified_Fail"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TRG_Cron_1min": {
+      "main": [
+        [
+          {
+            "node": "DB_FetchDueItems",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_FetchDueItems": {
+      "main": [
+        [
+          {
+            "node": "CHK_HasItems",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CHK_HasItems": {
+      "main": [
+        [
+          {
+            "node": "TRF_BuildReminderMessage",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "LOG_NoReminders",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRF_BuildReminderMessage": {
+      "main": [
+        [
+          {
+            "node": "API_ZAPI_SendReminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "API_ZAPI_SendReminder": {
+      "main": [
+        [
+          {
+            "node": "CHK_ZAPIResult",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CHK_ZAPIResult": {
+      "main": [
+        [
+          {
+            "node": "DB_MarkNotified",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "DB_MarkNotified_Fail",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_MarkNotified": {
+      "main": [
+        [
+          {
+            "node": "LOG_ReminderSent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DB_MarkNotified_Fail": {
+      "main": [
+        [
+          {
+            "node": "LOG_ReminderFailed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "versionId": "5887db1e-fd9d-4618-aed0-85c01e2eaad5",
+  "meta": {
+    "instanceId": "e5b5be90f9458642dd4b6a612950f8d170694c02cfe60ae6b638142ad8aa31e6"
+  },
+  "id": "pfkbbIDZD9iB7K6Q",
+  "tags": [
+    {
+      "updatedAt": "2026-02-28T20:43:57.398Z",
+      "createdAt": "2026-02-28T20:43:57.398Z",
+      "id": "L6OShbFn4DQIWFov",
+      "name": "v3 EMII - staging"
+    }
+  ]
+}
